@@ -28,7 +28,10 @@ __VERSION__ = 'v0.1.beta'
 plugin_name = 'SimBrief2Zibo'
 plugin_sig = 'xppython3.simbrief2zibo'
 plugin_desc = 'Fetches latest OFP Data from SimBrief and creates the file ZIBO B738 requires'
-loop_schedule = 30  # positive numbers are seconds, 0 disabled, negative numbers are cycles
+
+# Other parameters
+loop_schedule = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
+days = 2  # how recent a fp file has to be to be considered
 
 
 class PythonInterface:
@@ -66,6 +69,13 @@ class PythonInterface:
         # load settings
         self.load_settings()
 
+        # widget
+        self.settings_widget = None
+        self.message = ""  # text displayed in widget info_line
+
+        # create main menu and widget
+        self.main_menu = self.create_main_menu()
+
     @property
     def simbrief_url(self) -> str | bool:
         return f"https://www.simbrief.com/api/xml.fetcher.php?userid={self.pilot_id}&json=1"
@@ -86,27 +96,116 @@ class PythonInterface:
     def at_gate(self) -> bool:
         return self.on_ground and not self.engines_started
 
+    def create_main_menu(self):
+        # create Menu
+        menu = xp.createMenu('SimBrief2Zibo', handler=self.main_menu_callback)
+        # add Menu Items
+        xp.appendMenuItem(menu, 'Settings', 1)
+        return menu
+
+    def main_menu_callback(self, menuRef, menuItem):
+        """Main menu Callback"""
+        if menuItem == 1:
+            if not self.settings_widget:
+                self.create_settings_widget(221, 640)
+            elif not xp.isWidgetVisible(self.settings_widget):
+                xp.showWidget(self.settings_widget)
+
+    def create_settings_widget(self, x: int = 10, y: int = 800):
+        self.settings_widget = xp.createWidget(x, y, x+240, y-120, 1, "Settings", 1, 0, xp.WidgetClass_MainWindow)
+        xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowHasCloseBoxes, 1)
+
+        x += 10
+        y -= 20
+        caption = xp.createWidget(x, y, x + 95, y - 20, 1, 'Simbrief PilotID:', 0,
+                                  self.settings_widget, xp.WidgetClass_Caption)
+
+        self.pilot_id_input = xp.createWidget(x + 100, y, x + 170, y - 20, 1, "", 0,
+                                              self.settings_widget, xp.WidgetClass_TextField)
+
+        self.pilot_id_caption = xp.createWidget(x + 100, y, x + 170, y - 20, 1, "", 0,
+                                                self.settings_widget, xp.WidgetClass_Caption)
+
+        self.save_button = xp.createWidget(x + 175, y, x + 220, y - 20, 1, "SAVE", 0,
+                                           self.settings_widget, xp.WidgetClass_Button)
+
+        self.edit_button = xp.createWidget(x + 175, y, x + 220, y - 20, 1, "CHANGE", 0,
+                                           self.settings_widget, xp.WidgetClass_Button)
+
+        y -= 25
+
+        self.info_line = xp.createWidget(x, y, x + 220, y - 20, 1, "", 0,
+                                         self.settings_widget, xp.WidgetClass_Caption)
+
+        self.setup_widget()
+
+        # Register our widget handler
+        self.widgetHandlerCB = self.widgetHandler
+        xp.addWidgetCallback(self.settings_widget, self.widgetHandlerCB)
+        xp.setKeyboardFocus(self.pilot_id_input)
+
+    def widgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+        if xp.getWidgetDescriptor(self.info_line) != self.message:
+            xp.setWidgetDescriptor(self.info_line, self.message)
+        if inMessage == xp.Message_CloseButtonPushed:
+            if self.settings_widget:
+                xp.hideWidget(self.settings_widget)
+                return 1
+        if inMessage == xp.Msg_PushButtonPressed:
+            if inParam1 == self.save_button:
+                self.save_settings()
+                return 1
+            if inParam1 == self.edit_button:
+                xp.setWidgetDescriptor(self.pilot_id_input, f"{self.pilot_id}")
+                self.pilot_id = None
+                self.settings_widget()
+                return 1
+        return 0
+
+    def setup_widget(self):
+        if self.pilot_id:
+            xp.hideWidget(self.pilot_id_input)
+            xp.hideWidget(self.save_button)
+            xp.setWidgetDescriptor(self.pilot_id_caption, f"{self.pilot_id}")
+            xp.showWidget(self.pilot_id_caption)
+            xp.showWidget(self.edit_button)
+        else:
+            xp.hideWidget(self.pilot_id_caption)
+            xp.hideWidget(self.edit_button)
+            xp.showWidget(self.pilot_id_input)
+            xp.showWidget(self.save_button)
+
     def loopCallback(self, lastCall, elapsedTime, counter, refCon):
         """Loop Callback"""
         _, acf_path = xp.getNthAircraftModel(0)
-        if 'B737-800X' in acf_path and not self.flight_started and self.pilot_id:
-            xp.log(f' - {datetime.now().strftime("%H:%M:%S")} Loop started...')
+        if 'B737-800X' in acf_path and self.pilot_id:
             xp.log(f"FP checked: {self.fp_checked} | At gate: {self.at_gate} | Flight started: {self.flight_started}")
-            if not self.fp_checked and self.at_gate:
-                # check fp
-                xp.log(f"starting FP routine...")
-                self.check_simbrief()
-            elif not self.flight_started and not self.at_gate:
-                # flight mode, do nothing
-                xp.log(f'set flight started...')
-                xp.scheduleFlightLoop(self.loop_id, loop_schedule*10)
-                self.flight_started = True
-            elif self.flight_started and self.at_gate:
+            if not self.flight_started:
+                if not self.fp_checked and self.at_gate:
+                    # check fp
+                    xp.log(f"starting FP routine...")
+                    xp.scheduleFlightLoop(self.loop_id, loop_schedule)
+                    self.check_simbrief()
+                elif not self.flight_started and not self.at_gate:
+                    # flight mode, do nothing
+                    xp.log(f'set flight started...')
+                    xp.scheduleFlightLoop(self.loop_id, loop_schedule*10)
+                    self.flight_started = True
+            elif self.at_gate:
                 # look for a new OFP for a turnaround flight
                 xp.log(f'set flight ended...')
                 xp.scheduleFlightLoop(self.loop_id, loop_schedule)
                 self.flight_started = False
                 self.fp_checked = False
+        else:
+            # nothing to do
+            if not 'B737-800X' in acf_path:
+                self.message = "Zibo not detected"
+            elif not self.pilot_id:
+                self.message = "SimBrief PilotID required"
+            else:
+                self.message = "Flight started"
+            xp.log(f"{self.message}: nothing to do, exiting ...")
         return loop_schedule
 
     def load_settings(self) -> bool:
@@ -116,13 +215,24 @@ class PythonInterface:
                 data = f.read()
             # parse file
             settings = json.loads(data)
-            self.pilot_id = settings.get('pilot_id')
+            self.pilot_id = settings.get('settings').get('pilot_id')
             return True
         else:
+            # open settings window
+            return False
+
+    def save_settings(self):
             #! user id until a widget is created
             #! self.pilot_id = 
             #! return True
             pass
+        user_id = int(xp.getWidgetDescriptor(self.pilot_id_input).strip())
+        settings = {'settings': {'pilot_id': user_id}}
+        with open(self.config_file, 'w') as f:
+            json.dump(settings, f)
+        # check file
+        self.load_settings()
+        self.setup_widget()
 
     def check_simbrief(self):
         xp.log(f"pilotID = {self.pilot_id}, contacting SimBrief...")
@@ -146,7 +256,7 @@ class PythonInterface:
             xp.log(f"fp filename: {self.fp_filename} | data: {data}")
             if self.create_xml_file(data):
                 self.fp_checked = True
-
+                self.message = f"All set: {self.fp_filename}"
 
     def read_ofp(self) -> json:
         try:
@@ -179,11 +289,11 @@ class PythonInterface:
         return data
 
     def get_fp_filename(self):
-        yesterday = datetime.now() - timedelta(days=1)
+        recent = datetime.now() - timedelta(days=days)
         files = [
             f for f in self.plans.iterdir()
             if f.suffix in ('.fms', '.fmx')
-            and datetime.fromtimestamp(f.stat().st_ctime) > yesterday
+            and datetime.fromtimestamp(f.stat().st_ctime) > recent
             and f.stem.startswith(self.origin)
             and self.destination in f.stem
         ]
@@ -235,8 +345,8 @@ class PythonInterface:
     def XPluginStart(self):
         # loopCallback
         self.loop = self.loopCallback
-        self.loop_id = xp.createFlightLoop(self.loop, 0)
-        xp.log(f"flightloop created, ID {self.loop_id}")
+        self.loop_id = xp.createFlightLoop(self.loop, 1)
+        xp.log(f" - {datetime.now().strftime('%H:%M:%S')} Flightloop created, ID {self.loop_id}")
         xp.scheduleFlightLoop(self.loop_id, loop_schedule)
         return self.plugin_name, self.plugin_sig, self.plugin_desc
 
@@ -245,6 +355,8 @@ class PythonInterface:
 
     def XPluginStop(self):
         # Called once by X-Plane on quit (or when plugins are exiting as part of reload)
-        xp.log(f"flightloop destroyed ...")
+        xp.log(f"flightloop, widget, menu destroyed, exiting ...")
         xp.destroyFlightLoop(self.loop_id)
+        xp.destroyWidget(self.settings_widget)
+        xp.destroyMenu(self.main_menu)
         pass
