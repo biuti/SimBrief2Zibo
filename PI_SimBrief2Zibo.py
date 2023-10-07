@@ -222,10 +222,6 @@ class PythonInterface:
             return False
 
     def save_settings(self):
-            #! user id until a widget is created
-            #! self.pilot_id = 
-            #! return True
-            pass
         user_id = int(xp.getWidgetDescriptor(self.pilot_id_input).strip())
         settings = {'settings': {'pilot_id': user_id}}
         with open(self.config_file, 'w') as f:
@@ -271,7 +267,7 @@ class PythonInterface:
         LIDO: \n400 288/021 -54  400 320/020 -54  400 332/028 -55  350 330/022 -44\n380 272/019 -50  380 310/016 -50  380 333/024 -51  310 343/025 -34\n360 285/017 -46  360 319/017 -46  360 331/023 -46  200 005/009 -10\n340 301/016 -42  340 326/019 -42  340 328/021 -42  150 297/004 +02\n320 313/019 -36  320 328/021 -37  320 332/024 -37  100 258/001 +11
         """
 
-        data = {}
+        layout = ofp.get('params').get('ofp_layout')
         fix = ofp.get('navlog').get('fix')[-1]
         if fix.get('ident') == self.destination:
             dest_isa = int(fix.get('oat_isa_dev'))
@@ -280,13 +276,12 @@ class PythonInterface:
             dest_isa = int(ofp.get('general').get('avg_temp_dev'))
         
         dest_metar = ofp.get('destination').get('metar')
-        
-        data['dest_isa'] = dest_isa
-        data['dest_metar'] = dest_metar
-        text = ofp.get('text').get('plan_html').split('DESCENT')[1].split('\n\n')[0]
-        lines = text.split('\n')[1:]
-        data['winds'] = [tuple(l.split()[-3:]) for l in lines]
-        return data
+
+        return {
+            'dest_isa': dest_isa,
+            'dest_metar': dest_metar,
+            'winds': extract_descent_winds(ofp, layout=layout)
+        }
 
     def get_fp_filename(self):
         recent = datetime.now() - timedelta(days=days)
@@ -360,3 +355,49 @@ class PythonInterface:
         xp.destroyWidget(self.settings_widget)
         xp.destroyMenu(self.main_menu)
         pass
+
+
+def extract_descent_winds(ofp: dict, layout: str) -> list:
+    """
+    Descent wind have to be extracted from plan_html section, so it's dependant on OFP layout
+    """
+
+    if any(s in layout for s in ('RYR', 'LIDO', 'THY', 'ACA')):
+        text = ofp.get('text').get('plan_html').split('DESCENT')[1].split('\n\n')[0]
+        lines = text.split('\n')[1:]
+        return [tuple(l.split()[-3:]) for l in lines]
+    elif layout == 'UAL 2018':
+        text = ofp.get('text').get('plan_html').split('DESCENT WINDS')[1].split('STARTFWZPAD')[0]
+        lines = text.split('</tr><tr>')[1:5]
+        winds = []
+        for line in lines:
+            table = ET.XML(f"<html> + {line} + </html>")
+            rows = iter(table)
+            winds.append(tuple(row.text.strip().replace('FL', '') or '+15' for row in rows))
+    elif layout == 'DAL':
+        text = ofp.get('text').get('plan_html').split('DESCENT FORECAST WINDS')[1].split('*')[0]
+        lines = text.split('\n')[1:-1]
+        data = list(zip(*[line.split() for line in lines]))
+        idx100 = list(map(lambda x:x[0], data)).index("10000") + 1
+        return [(el[0][:-2], f"{el[1][:2]}0/{el[1][-3:]}", '+15') for el in data][:idx100]
+    elif layout == 'SWA':
+        text = ofp.get('text').get('plan_html').split('DESCENT WINDS')[1].split('\n\n')[0]
+        lines = text.strip().split('\n')
+        data = list(zip(*[line.split() for line in lines]))
+        return [
+            (
+                el[0][:-2],
+                f"{el[1][:2]}0{el[1][2:6]}", 
+                f"{'+' if 'P' in el[1] else '-'}{el[1][-2:]}"
+            )
+            for el in data
+        ]
+    elif layout == 'KLM':
+        text = ofp.get('text').get('plan_html').split('CRZ ALT')[1].split('DEFRTE')[0]
+        lines = lines = text.replace('FL', '').split('\n')[:3]
+        return [(*l.split()[-2:], '+15') for l in lines]
+    else:
+        # AAL, QFA have no descent winds in OFP
+        # AFR, DLH, UAE, JZA, JBU, GWI, EZY, ETD, EIN, BER, BAW, AWE have no 738 or are not operative
+        return [('', '', '')]*5
+    return winds
