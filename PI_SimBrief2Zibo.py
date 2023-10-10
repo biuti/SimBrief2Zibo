@@ -12,8 +12,9 @@ LICENSE file in the root directory of this source tree.
 import json
 
 from pathlib import Path
-from urllib import request
+from urllib import request, parse
 from urllib.error import URLError, HTTPError
+from ssl import SSLCertVerificationError
 from xml.etree import ElementTree as ET
 from datetime import datetime, timedelta
 
@@ -22,7 +23,7 @@ from XPPython3 import xp
 
 
 # Version
-__VERSION__ = 'v0.1.beta'
+__VERSION__ = 'v0.2.beta'
 
 # Plugin parameters required from XPPython3
 plugin_name = 'SimBrief2Zibo'
@@ -32,6 +33,13 @@ plugin_desc = 'Fetches latest OFP Data from SimBrief and creates the file ZIBO B
 # Other parameters
 loop_schedule = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
 days = 2  # how recent a fp file has to be to be considered
+
+# widget parameters
+width = 250
+height = 250
+margin = 10
+line = 12
+header = 32
 
 
 class PythonInterface:
@@ -56,12 +64,13 @@ class PythonInterface:
         # app init
         self.config_file = Path(self.prefs, 'simbrief2zibo.prf')
         self.pilot_id = None  # SimBrief UserID, int
-        self.ofp_id = None  # OFP generated ID
+        self.request_id = None  # OFP generated ID
         self.url = None  # SimBrief API url
         self.origin = None  # OFP departure ICAO
         self.destination = None  # OFP destination ICAO
         self.fp_filename = None  # fms/fmx filename
         self.fp_link = None  # link to download XP12 fms from SimBrief
+        self.fp_info = {}  # information to display in the settings window
 
         self.flight_started = False  # tracks simulation phase
         self.fp_checked = False  # tracks app phase
@@ -71,6 +80,7 @@ class PythonInterface:
 
         # widget
         self.settings_widget = None
+        self.fp_info_caption = []
         self.message = ""  # text displayed in widget info_line
 
         # create main menu and widget
@@ -107,35 +117,53 @@ class PythonInterface:
         """Main menu Callback"""
         if menuItem == 1:
             if not self.settings_widget:
-                self.create_settings_widget(221, 640)
+                self.create_settings_widget(200, 600)
             elif not xp.isWidgetVisible(self.settings_widget):
                 xp.showWidget(self.settings_widget)
 
     def create_settings_widget(self, x: int = 10, y: int = 800):
-        self.settings_widget = xp.createWidget(x, y, x+240, y-120, 1, "Settings", 1, 0, xp.WidgetClass_MainWindow)
+
+        left, top, right, bottom = x + margin, y - header - margin, x + width - margin, y - height + margin
+
+        # main windows
+        self.settings_widget = xp.createWidget(x, y, x+width, y-height, 1, "Settings", 1, 0, xp.WidgetClass_MainWindow)
         xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowHasCloseBoxes, 1)
 
-        x += 10
-        y -= 20
-        caption = xp.createWidget(x, y, x + 95, y - 20, 1, 'Simbrief PilotID:', 0,
-                                  self.settings_widget, xp.WidgetClass_Caption)
+        # PilotID sub window
+        # l, t, r, b = left + margin, top - margin, left + width - margin, top - margin - line*2
+        self.pilot_id_widget = xp.createWidget(left, top, right, top - line - margin*2, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
 
-        self.pilot_id_input = xp.createWidget(x + 100, y, x + 170, y - 20, 1, "", 0,
-                                              self.settings_widget, xp.WidgetClass_TextField)
-
-        self.pilot_id_caption = xp.createWidget(x + 100, y, x + 170, y - 20, 1, "", 0,
-                                                self.settings_widget, xp.WidgetClass_Caption)
-
-        self.save_button = xp.createWidget(x + 175, y, x + 220, y - 20, 1, "SAVE", 0,
-                                           self.settings_widget, xp.WidgetClass_Button)
-
-        self.edit_button = xp.createWidget(x + 175, y, x + 220, y - 20, 1, "CHANGE", 0,
-                                           self.settings_widget, xp.WidgetClass_Button)
-
-        y -= 25
-
-        self.info_line = xp.createWidget(x, y, x + 220, y - 20, 1, "", 0,
+        l, t, r, b = left + margin, top - margin, right - margin, top - margin - line
+        caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
+                                  self.pilot_id_widget, xp.WidgetClass_Caption)
+        self.pilot_id_input = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
+                                              self.pilot_id_widget, xp.WidgetClass_TextField)
+        self.pilot_id_caption = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
+                                                self.pilot_id_widget, xp.WidgetClass_Caption)
+        self.save_button = xp.createWidget(l + 150, t, r, b, 1, "SAVE", 0,
+                                           self.pilot_id_widget, xp.WidgetClass_Button)
+        self.edit_button = xp.createWidget(l + 150, t, r, b, 1, "CHANGE", 0,
+                                           self.pilot_id_widget, xp.WidgetClass_Button)
+        t = b - margin*2
+        # info message line
+        self.info_line = xp.createWidget(left, t, right, t - line, 1, "", 0,
                                          self.settings_widget, xp.WidgetClass_Caption)
+        t -= line + margin
+        # OFP info sub window
+        self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
+        t -= margin
+        b = bottom + margin
+        w = r - l
+        cap = xp.createWidget(l, t, r, t - line, 1, 'OFP INFO:', 0,
+                                  self.fp_info_widget, xp.WidgetClass_Caption)
+        self.fp_info_caption.append(cap)
+        t -= line + margin
+        while t > b:
+            cap = xp.createWidget(l, t, r, t - line, 1, '--', 0,
+                                  self.fp_info_widget, xp.WidgetClass_Caption)
+            self.fp_info_caption.append(cap)
+            t -= line
+        xp.log(f"added {len(self.fp_info_caption)} info lines")
 
         self.setup_widget()
 
@@ -147,10 +175,20 @@ class PythonInterface:
     def widgetHandler(self, inMessage, inWidget, inParam1, inParam2):
         if xp.getWidgetDescriptor(self.info_line) != self.message:
             xp.setWidgetDescriptor(self.info_line, self.message)
+
+        if self.fp_info:
+            if not self.fp_info.get('zfw') in xp.getWidgetDescriptor(self.fp_info_caption[-1]):
+                self.populate_info_widget()
+            if not xp.isWidgetVisible(self.fp_info_widget):
+                xp.showWidget(self.fp_info_widget)
+        else:
+            xp.hideWidget(self.fp_info_widget)
+
         if inMessage == xp.Message_CloseButtonPushed:
             if self.settings_widget:
                 xp.hideWidget(self.settings_widget)
                 return 1
+
         if inMessage == xp.Msg_PushButtonPressed:
             if inParam1 == self.save_button:
                 self.save_settings()
@@ -158,7 +196,7 @@ class PythonInterface:
             if inParam1 == self.edit_button:
                 xp.setWidgetDescriptor(self.pilot_id_input, f"{self.pilot_id}")
                 self.pilot_id = None
-                self.settings_widget()
+                self.setup_widget()
                 return 1
         return 0
 
@@ -174,6 +212,11 @@ class PythonInterface:
             xp.hideWidget(self.edit_button)
             xp.showWidget(self.pilot_id_input)
             xp.showWidget(self.save_button)
+
+    def populate_info_widget(self):
+        # xp.log(f"fp_info? {bool(self.fp_info)}")
+        for i, (k, v) in enumerate(self.fp_info.items(), 1):
+            xp.setWidgetDescriptor(self.fp_info_caption[i], f"{k.upper()}: {v}")
 
     def loopCallback(self, lastCall, elapsedTime, counter, refCon):
         """Loop Callback"""
@@ -191,12 +234,14 @@ class PythonInterface:
                     xp.log(f'set flight started...')
                     xp.scheduleFlightLoop(self.loop_id, loop_schedule*10)
                     self.flight_started = True
+                    self.message = "Have a nice flight!"
             elif self.at_gate:
                 # look for a new OFP for a turnaround flight
                 xp.log(f'set flight ended...')
                 xp.scheduleFlightLoop(self.loop_id, loop_schedule)
                 self.flight_started = False
                 self.fp_checked = False
+                self.fp_info = {}
         else:
             # nothing to do
             if not 'B737-800X' in acf_path:
@@ -236,10 +281,12 @@ class PythonInterface:
         if ofp.get('error'):
             # some error occurred
             xp.log(f"check_simbrief: {ofp.get('error')}")
+            self.message = f"Error trying to connect to SimBrief"
             return
 
-        if self.ofp_id and self.ofp_id == ofp.get('params').get('request_id'):
+        if self.request_id and self.request_id == ofp.get('params').get('request_id'):
             # no new OFP
+            self.message = "No new OFP available"
             return
 
         self.origin = ofp.get('origin').get('icao_code')
@@ -247,20 +294,42 @@ class PythonInterface:
         self.fp_link = ofp.get('fms_downloads').get('directory') + ofp.get('fms_downloads').get('xpe').get('link')
         xp.log(f"ORIGIN: {self.origin} | DESTINATION: {self.destination} | link: {self.fp_link}")
         if self.origin and self.destination:
+            self.fp_link = ofp.get('fms_downloads').get('directory') + ofp.get('fms_downloads').get('xpe').get('link')
             self.get_fp_filename()
             data = self.parse_ofp(ofp)
             xp.log(f"fp filename: {self.fp_filename} | data: {data}")
             if self.create_xml_file(data):
                 self.fp_checked = True
+                self.request_id = ofp.get('params').get('request_id')
                 self.message = f"All set: {self.fp_filename}"
+                # get more info
+                weights = ofp.get('weights')
+                u = ofp.get('params').get('units')
+                self.fp_info = {
+                    'oew': f"{weights.get('oew')} {u}",
+                    'pax': f"{weights.get('pax_count_actual')}",
+                    'cargo': f"{weights.get('cargo')} {u}",
+                    'payload': f"{weights.get('payload')} {u}",
+                    'zfw': f"{weights.get('est_zfw')} {u}"
+                }
 
     def read_ofp(self) -> json:
         try:
             response = request.urlopen(self.simbrief_url)
-            ofp = json.loads(response.read())
-            return ofp
-        except HTTPError | URLError as e:
-            return {'error': 'Error retrieving OFP: {e}'}
+        except SSLCertVerificationError:
+            # change link to unsecure protocol to avoid SSL error in some weird systems
+            xp.log(f"read_ofp() had to run in unsecure mode")
+            try:
+                parsed = parse.urlparse(self.simbrief_url)
+                parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
+                link = parse.urlunparse(parsed)
+                response = request.urlopen(link)
+            except (HTTPError, URLError) as e:
+                return {'error': f'Error retrieving OFP: {e}'}
+        except (HTTPError, URLError) as e:
+            return {'error': f'Error retrieving OFP: {e}'}
+        ofp = json.loads(response.read())
+        return ofp
 
     def parse_ofp(self, ofp: json) -> dict:
         """
@@ -305,9 +374,21 @@ class PythonInterface:
         file = Path(self.plans, fp_filename)
         try:
             result = request.urlretrieve(self.fp_link, file)
-            self.fp_filename = file.stem
-        except HTTPError | URLError as e:
-            pass
+        except SSLCertVerificationError:
+            # change link to unsecure protocol to avoid SSL error in some weird systems
+            parsed = parse.urlparse(self.fp_link)
+            parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
+            link = parse.urlunparse(parsed)
+            try:
+                result = request.urlretrieve(link, file)
+            except (HTTPError, URLError) as e:
+                self.message = "Error downloading FP file"
+                xp.log(f'Error downloading fms file: {e}')
+                return
+        except (HTTPError, URLError) as e:
+            self.message = "Error downloading FP file"
+            return
+        self.fp_filename = file.stem
 
     def create_xml_file(self, data: dict) -> bool:
         """we need to recreate the plan_html parts we use as in LIDO format"""
@@ -338,14 +419,13 @@ class PythonInterface:
             return False
 
     def XPluginStart(self):
-        # loopCallback
-        self.loop = self.loopCallback
-        self.loop_id = xp.createFlightLoop(self.loop, 1)
-        xp.log(f" - {datetime.now().strftime('%H:%M:%S')} Flightloop created, ID {self.loop_id}")
-        xp.scheduleFlightLoop(self.loop_id, loop_schedule)
         return self.plugin_name, self.plugin_sig, self.plugin_desc
 
     def XPluginEnable(self):
+        # loopCallback
+        self.loop = self.loopCallback
+        self.loop_id = xp.createFlightLoop(self.loop, phase=1)
+        xp.scheduleFlightLoop(self.loop_id, loop_schedule)
         return 1
 
     def XPluginStop(self):
@@ -354,7 +434,6 @@ class PythonInterface:
         xp.destroyFlightLoop(self.loop_id)
         xp.destroyWidget(self.settings_widget)
         xp.destroyMenu(self.main_menu)
-        pass
 
 
 def extract_descent_winds(ofp: dict, layout: str) -> list:
