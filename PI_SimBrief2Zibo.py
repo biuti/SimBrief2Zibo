@@ -9,7 +9,9 @@ This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree. 
 """
 
+import os
 import json
+import multiprocessing
 
 from pathlib import Path
 from urllib import request, parse
@@ -18,12 +20,14 @@ from ssl import SSLCertVerificationError
 from xml.etree import ElementTree as ET
 from datetime import datetime, timedelta
 
-
-from XPPython3 import xp
+try:
+    from XPPython3 import xp
+except ImportError:
+    pass
 
 
 # Version
-__VERSION__ = 'v0.2.beta'
+__VERSION__ = 'v0.6.beta'
 
 # Plugin parameters required from XPPython3
 plugin_name = 'SimBrief2Zibo'
@@ -43,6 +47,10 @@ header = 32
 
 
 class PythonInterface:
+
+    async_started = False
+    async_pid = False
+    response = None
 
     def __init__(self) -> None:
         self.plugin_name = f"{plugin_name} - {__VERSION__}"
@@ -100,7 +108,8 @@ class PythonInterface:
     def on_ground(self) -> bool:
         values = []
         xp.getDatavi(self.gears_on_ground, values, count=3)
-        return all(values)
+        # should be all(values) but after Zibo loading front gear appears to be in the air
+        return any(values)
 
     @property
     def at_gate(self) -> bool:
@@ -130,7 +139,6 @@ class PythonInterface:
         xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowHasCloseBoxes, 1)
 
         # PilotID sub window
-        # l, t, r, b = left + margin, top - margin, left + width - margin, top - margin - line*2
         self.pilot_id_widget = xp.createWidget(left, top, right, top - line - margin*2, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
 
         l, t, r, b = left + margin, top - margin, right - margin, top - margin - line
@@ -218,6 +226,9 @@ class PythonInterface:
         for i, (k, v) in enumerate(self.fp_info.items(), 1):
             xp.setWidgetDescriptor(self.fp_info_caption[i], f"{k.upper()}: {v}")
 
+    def response_callback(self, result):
+        self.async_pid, self.response = result
+        self.async_started = False
     def loopCallback(self, lastCall, elapsedTime, counter, refCon):
         """Loop Callback"""
         _, acf_path = xp.getNthAircraftModel(0)
@@ -227,11 +238,32 @@ class PythonInterface:
                 if not self.fp_checked and self.at_gate:
                     # check fp
                     xp.log(f"starting FP routine...")
-                    xp.scheduleFlightLoop(self.loop_id, loop_schedule)
-                    self.check_simbrief()
+                    if self.response:
+                        self.check_simbrief()
+                    elif self.async_started:
+                        if self.async_pid or datetime.now() - self.async_started > timedelta(seconds=loop_schedule*2):
+                            # need to try again
+                            self.async_pid = False
+                            self.async_started = False
+                        else:
+                            # no answer yet, waiting ...
+                            pass
+                    else:
+                        self.message = "Contacting SimBrief ..."
+                        multiprocessing.set_executable(xp.pythonExecutable)
+                        pool = multiprocessing.Pool()
+                        self.async_pid = False
+                        self.response = None
+                        result = pool.apply_async(
+                            get_response,
+                            args=(self.simbrief_url,),
+                            callback=self.response_callback
+                        )
+                        pool.close()
+                        self.async_started = datetime.now()
+
                 elif not self.flight_started and not self.at_gate:
                     # flight mode, do nothing
-                    xp.log(f'set flight started...')
                     xp.scheduleFlightLoop(self.loop_id, loop_schedule*10)
                     self.flight_started = True
                     self.message = "Have a nice flight!"
@@ -242,15 +274,14 @@ class PythonInterface:
                 self.flight_started = False
                 self.fp_checked = False
                 self.fp_info = {}
+                self.message = "Looking for a new OFP ..."
         else:
             # nothing to do
             if not 'B737-800X' in acf_path:
                 self.message = "Zibo not detected"
             elif not self.pilot_id:
                 self.message = "SimBrief PilotID required"
-            else:
-                self.message = "Flight started"
-            xp.log(f"{self.message}: nothing to do, exiting ...")
+
         return loop_schedule
 
     def load_settings(self) -> bool:
@@ -277,59 +308,49 @@ class PythonInterface:
 
     def check_simbrief(self):
         xp.log(f"pilotID = {self.pilot_id}, contacting SimBrief...")
-        ofp = self.read_ofp()
-        if ofp.get('error'):
+        if self.response.get('error'):
             # some error occurred
             xp.log(f"check_simbrief: {ofp.get('error')}")
             self.message = f"Error trying to connect to SimBrief"
+            self.response = None
             return
 
-        if self.request_id and self.request_id == ofp.get('params').get('request_id'):
+        if self.request_id and self.request_id == self.response.get('params').get('request_id'):
             # no new OFP
             self.message = "No new OFP available"
+            self.response = None
             return
 
+        ofp = self.response
         self.origin = ofp.get('origin').get('icao_code')
         self.destination = ofp.get('destination').get('icao_code')
-        self.fp_link = ofp.get('fms_downloads').get('directory') + ofp.get('fms_downloads').get('xpe').get('link')
-        xp.log(f"ORIGIN: {self.origin} | DESTINATION: {self.destination} | link: {self.fp_link}")
         if self.origin and self.destination:
             self.fp_link = ofp.get('fms_downloads').get('directory') + ofp.get('fms_downloads').get('xpe').get('link')
-            self.get_fp_filename()
-            data = self.parse_ofp(ofp)
-            xp.log(f"fp filename: {self.fp_filename} | data: {data}")
-            if self.create_xml_file(data):
-                self.fp_checked = True
-                self.request_id = ofp.get('params').get('request_id')
-                self.message = f"All set: {self.fp_filename}"
-                # get more info
-                weights = ofp.get('weights')
-                u = ofp.get('params').get('units')
-                self.fp_info = {
-                    'oew': f"{weights.get('oew')} {u}",
-                    'pax': f"{weights.get('pax_count_actual')}",
-                    'cargo': f"{weights.get('cargo')} {u}",
-                    'payload': f"{weights.get('payload')} {u}",
-                    'zfw': f"{weights.get('est_zfw')} {u}"
-                }
-
-    def read_ofp(self) -> json:
-        try:
-            response = request.urlopen(self.simbrief_url)
-        except SSLCertVerificationError:
-            # change link to unsecure protocol to avoid SSL error in some weird systems
-            xp.log(f"read_ofp() had to run in unsecure mode")
-            try:
-                parsed = parse.urlparse(self.simbrief_url)
-                parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
-                link = parse.urlunparse(parsed)
-                response = request.urlopen(link)
-            except (HTTPError, URLError) as e:
-                return {'error': f'Error retrieving OFP: {e}'}
-        except (HTTPError, URLError) as e:
-            return {'error': f'Error retrieving OFP: {e}'}
-        ofp = json.loads(response.read())
-        return ofp
+            self.fp_filename = self.get_fp_filename()
+            if not self.fp_filename:
+                # we need to download FP from SimBrief
+                t = datetime.now()
+                file = Path(self.plans, self.origin + self.destination + '.fms')
+                result = download(self.fp_link, file)
+                if result:
+                    self.fp_filename = result
+            if self.fp_filename:
+                data = self.parse_ofp(ofp)
+                if self.create_xml_file(data):
+                    self.fp_checked = True
+                    self.response = None
+                    self.request_id = ofp.get('params').get('request_id')
+                    self.message = f"All set: {self.fp_filename}"
+                    # get more info
+                    weights = ofp.get('weights')
+                    u = ofp.get('params').get('units')
+                    self.fp_info = {
+                        'oew': f"{weights.get('oew')} {u}",
+                        'pax': f"{weights.get('pax_count_actual')}",
+                        'cargo': f"{weights.get('cargo')} {u}",
+                        'payload': f"{weights.get('payload')} {u}",
+                        'zfw': f"{weights.get('est_zfw')} {u}"
+                    }
 
     def parse_ofp(self, ofp: json) -> dict:
         """
@@ -352,7 +373,7 @@ class PythonInterface:
             'winds': extract_descent_winds(ofp, layout=layout)
         }
 
-    def get_fp_filename(self):
+    def get_fp_filename(self) -> Path | None:
         recent = datetime.now() - timedelta(days=days)
         files = [
             f for f in self.plans.iterdir()
@@ -364,31 +385,9 @@ class PythonInterface:
         if files:
             # user already created a FP for this OFP
             file = max(files, key=lambda x: x.stat().st_ctime)
-            self.fp_filename = file.stem
+            return file.stem
         else:
-            # we need to download FP from SimBrief
-            self.download_fp()
-
-    def download_fp(self):
-        fp_filename = self.origin + self.destination + '.fms'
-        file = Path(self.plans, fp_filename)
-        try:
-            result = request.urlretrieve(self.fp_link, file)
-        except SSLCertVerificationError:
-            # change link to unsecure protocol to avoid SSL error in some weird systems
-            parsed = parse.urlparse(self.fp_link)
-            parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
-            link = parse.urlunparse(parsed)
-            try:
-                result = request.urlretrieve(link, file)
-            except (HTTPError, URLError) as e:
-                self.message = "Error downloading FP file"
-                xp.log(f'Error downloading fms file: {e}')
-                return
-        except (HTTPError, URLError) as e:
-            self.message = "Error downloading FP file"
-            return
-        self.fp_filename = file.stem
+            return None
 
     def create_xml_file(self, data: dict) -> bool:
         """we need to recreate the plan_html parts we use as in LIDO format"""
@@ -440,7 +439,6 @@ def extract_descent_winds(ofp: dict, layout: str) -> list:
     """
     Descent wind have to be extracted from plan_html section, so it's dependant on OFP layout
     """
-
     if any(s in layout for s in ('RYR', 'LIDO', 'THY', 'ACA')):
         text = ofp.get('text').get('plan_html').split('DESCENT')[1].split('\n\n')[0]
         lines = text.split('\n')[1:]
@@ -449,8 +447,8 @@ def extract_descent_winds(ofp: dict, layout: str) -> list:
         text = ofp.get('text').get('plan_html').split('DESCENT WINDS')[1].split('STARTFWZPAD')[0]
         lines = text.split('</tr><tr>')[1:5]
         winds = []
-        for line in lines:
-            table = ET.XML(f"<html> + {line} + </html>")
+        for l in lines:
+            table = ET.XML(f"<html> + {l} + </html>")
             rows = iter(table)
             winds.append(tuple(row.text.strip().replace('FL', '') or '+15' for row in rows))
     elif layout == 'DAL':
@@ -480,3 +478,44 @@ def extract_descent_winds(ofp: dict, layout: str) -> list:
         # AFR, DLH, UAE, JZA, JBU, GWI, EZY, ETD, EIN, BER, BAW, AWE have no 738 or are not operative
         return [('', '', '')]*5
     return winds
+
+
+def get_response(url: str) -> tuple[int, dict]:
+    pid = os.getpid()
+    try:
+        response = request.urlopen(url)
+    except SSLCertVerificationError as e:
+        # change link to unsecure protocol to avoid SSL error in some weird systems
+        print(f" *** get_ofp() had to run in unsecure mode: {e}")
+        try:
+            parsed = parse.urlparse(url)
+            parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
+            link = parse.urlunparse(parsed)
+            response = request.urlopen(link)
+        except (HTTPError, URLError) as e:
+            print(f" *** get_ofp() unsecure mode error: {e}")
+            return pid, {'error': f'Error retrieving OFP: {e}'}
+    except (HTTPError, URLError) as e:
+        print(f" *** get_ofp() error: {e}")
+        return pid, {'error': f'Error retrieving OFP: {e}'}
+    ofp = json.loads(response.read())
+    return pid, ofp
+
+
+def download(source: str, destination: Path) -> Path | bool:
+    try:
+        result = request.urlretrieve(source, destination)
+    except SSLCertVerificationError:
+        # change link to unsecure protocol to avoid SSL error in some weird systems
+        parsed = parse.urlparse(source)
+        parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
+        link = parse.urlunparse(parsed)
+        try:
+            result = request.urlretrieve(link, destination)
+        except (HTTPError, URLError) as e:
+            xp.log(f'Error downloading fms file: {e}')
+            return False
+    except (HTTPError, URLError) as e:
+        xp.log(f'Error downloading fms file: {e}')
+        return False
+    return destination
