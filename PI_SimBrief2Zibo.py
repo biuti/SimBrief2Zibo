@@ -333,7 +333,7 @@ class PythonInterface:
                 file = Path(self.plans, self.origin + self.destination + '.fms')
                 result = download(self.fp_link, file)
                 if result:
-                    self.fp_filename = result
+                    self.fp_filename = result.stem
             if self.fp_filename:
                 data = self.parse_ofp(ofp)
                 if self.create_xml_file(data):
@@ -484,7 +484,7 @@ def get_response(url: str) -> tuple[int, dict]:
     pid = os.getpid()
     try:
         response = request.urlopen(url)
-    except SSLCertVerificationError as e:
+    except (SSLCertVerificationError, HTTPError, URLError) as e:
         # change link to unsecure protocol to avoid SSL error in some weird systems
         print(f" *** get_ofp() had to run in unsecure mode: {e}")
         try:
@@ -494,9 +494,8 @@ def get_response(url: str) -> tuple[int, dict]:
             response = request.urlopen(link)
         except (HTTPError, URLError) as e:
             print(f" *** get_ofp() unsecure mode error: {e}")
-            return pid, {'error': f'Error retrieving OFP: {e}'}
-    except (HTTPError, URLError) as e:
-        print(f" *** get_ofp() error: {e}")
+            return pid, {'error': f'Error retrieving OFP using unsecure protocol: {e}'}
+    except Exception as e:
         return pid, {'error': f'Error retrieving OFP: {e}'}
     ofp = json.loads(response.read())
     return pid, ofp
@@ -505,7 +504,7 @@ def get_response(url: str) -> tuple[int, dict]:
 def download(source: str, destination: Path) -> Path | bool:
     try:
         result = request.urlretrieve(source, destination)
-    except SSLCertVerificationError:
+    except (SSLCertVerificationError, HTTPError, URLError):
         # change link to unsecure protocol to avoid SSL error in some weird systems
         parsed = parse.urlparse(source)
         parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
@@ -515,7 +514,7 @@ def download(source: str, destination: Path) -> Path | bool:
         except (HTTPError, URLError) as e:
             xp.log(f'Error downloading fms file: {e}')
             return False
-    except (HTTPError, URLError) as e:
+    except Exception as e:
         xp.log(f'Error downloading fms file: {e}')
         return False
     return destination
