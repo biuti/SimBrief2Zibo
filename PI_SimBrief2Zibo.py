@@ -310,7 +310,7 @@ class PythonInterface:
         xp.log(f"pilotID = {self.pilot_id}, contacting SimBrief...")
         if self.response.get('error'):
             # some error occurred
-            xp.log(f"check_simbrief: {ofp.get('error')}")
+            xp.log(f"check_simbrief: {self.response.get('error')}")
             self.message = f"Error trying to connect to SimBrief"
             self.response = None
             return
