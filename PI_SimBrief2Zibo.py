@@ -67,8 +67,6 @@ class PythonInterface:
         self.gears_on_ground = xp.findDataRef('sim/flightmodel2/gear/on_ground')
         self.engines_burning_fuel = xp.findDataRef('sim/flightmodel2/engines/engine_is_burning_fuel')
 
-        xp.log(f"root: {self.xp_root} | prefs: {self.prefs} {self.prefs.is_dir()} | plans: {self.plans} {self.plans.is_dir()}")
-
         # app init
         self.config_file = Path(self.prefs, 'simbrief2zibo.prf')
         self.pilot_id = None  # SimBrief UserID, int
@@ -171,7 +169,6 @@ class PythonInterface:
                                   self.fp_info_widget, xp.WidgetClass_Caption)
             self.fp_info_caption.append(cap)
             t -= line
-        xp.log(f"added {len(self.fp_info_caption)} info lines")
 
         self.setup_widget()
 
@@ -233,11 +230,9 @@ class PythonInterface:
         """Loop Callback"""
         _, acf_path = xp.getNthAircraftModel(0)
         if 'B737-800X' in acf_path and self.pilot_id:
-            xp.log(f"FP checked: {self.fp_checked} | At gate: {self.at_gate} | Flight started: {self.flight_started}")
             if not self.flight_started:
                 if not self.fp_checked and self.at_gate:
                     # check fp
-                    xp.log(f"starting FP routine...")
                     if self.response:
                         self.check_simbrief()
                     elif self.async_started:
@@ -269,7 +264,6 @@ class PythonInterface:
                     self.message = "Have a nice flight!"
             elif self.at_gate:
                 # look for a new OFP for a turnaround flight
-                xp.log(f'set flight ended...')
                 xp.scheduleFlightLoop(self.loop_id, loop_schedule)
                 self.flight_started = False
                 self.fp_checked = False
@@ -307,7 +301,6 @@ class PythonInterface:
         self.setup_widget()
 
     def check_simbrief(self):
-        xp.log(f"pilotID = {self.pilot_id}, contacting SimBrief...")
         if self.response.get('error'):
             # some error occurred
             xp.log(f"check_simbrief: {self.response.get('error')}")
@@ -351,6 +344,7 @@ class PythonInterface:
                         'payload': f"{weights.get('payload')} {u}",
                         'zfw': f"{weights.get('est_zfw')} {u}"
                     }
+                    xp.log(f" ** {datetime.now().strftime('%H:%M:%S')} Loaded OFP: {self.fp_filename}")
 
     def parse_ofp(self, ofp: json) -> dict:
         """
@@ -512,7 +506,7 @@ def download(source: str, destination: Path) -> Path | bool:
         try:
             result = request.urlretrieve(link, destination)
         except (HTTPError, URLError) as e:
-            xp.log(f'Error downloading fms file: {e}')
+            xp.log(f'Error downloading fms file using unsecure protocol: {e}')
             return False
     except Exception as e:
         xp.log(f'Error downloading fms file: {e}')
