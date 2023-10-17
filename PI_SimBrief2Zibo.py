@@ -396,14 +396,15 @@ class PythonInterface(object):
 
         l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - MARGIN - LINE
         caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
-                                  self.pilot_id_widget, xp.WidgetClass_Caption)
+                                  self.settings_widget, xp.WidgetClass_Caption)
         self.pilot_id_input = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
-                                              self.pilot_id_widget, xp.WidgetClass_TextField)
+                                              self.settings_widget, xp.WidgetClass_TextField)
         self.pilot_id_caption = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
-                                                self.pilot_id_widget, xp.WidgetClass_Caption)
+                                                self.settings_widget, xp.WidgetClass_Caption)
         self.save_button = xp.createWidget(l + 150, t, r, b, 1, "SAVE", 0,
-                                           self.pilot_id_widget, xp.WidgetClass_Button)
+                                           self.settings_widget, xp.WidgetClass_Button)
         self.edit_button = xp.createWidget(l + 150, t, r, b, 1, "CHANGE", 0,
+                                           self.settings_widget, xp.WidgetClass_Button)
         t = b - MARGIN*2
         # info message line
         self.info_line = xp.createWidget(left, t, right, t - LINE, 1, "", 0,
@@ -415,12 +416,12 @@ class PythonInterface(object):
         b = bottom + MARGIN
         w = r - l
         cap = xp.createWidget(l, t, r, t - LINE, 1, 'OFP INFO:', 0,
-                                  self.fp_info_widget, xp.WidgetClass_Caption)
+                                  self.settings_widget, xp.WidgetClass_Caption)
         self.fp_info_caption.append(cap)
         t -= LINE + MARGIN
         while t > b:
             cap = xp.createWidget(l, t, r, t - LINE, 1, '--', 0,
-                                  self.fp_info_widget, xp.WidgetClass_Caption)
+                                  self.settings_widget, xp.WidgetClass_Caption)
             self.fp_info_caption.append(cap)
             t -= LINE
 
