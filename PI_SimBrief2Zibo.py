@@ -176,6 +176,10 @@ class SimBrief(object):
         if fp_filename:
             self.request_id = request_id
             self.fp_filename = fp_filename
+
+            # delete old XML file from the FMS plans folder
+            self.delete_old_xml_files()
+
             data = self.parse_ofp(ofp)
             if self.create_xml_file(data, fp_filename):
                 self.message = f"All set!"
@@ -266,6 +270,10 @@ class SimBrief(object):
             self.error = e
             return False
 
+    def delete_old_xml_files(self):
+        for f in self.path.iterdir():
+            if f.suffix == '.xml':
+                f.unlink()
 
 def extract_descent_winds(ofp: dict, layout: str) -> list:
     """
