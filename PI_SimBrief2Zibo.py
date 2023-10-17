@@ -36,15 +36,18 @@ plugin_sig = 'xppython3.simbrief2zibo'
 plugin_desc = 'Fetches latest OFP Data from SimBrief and creates the file ZIBO B738 requires'
 
 # Other parameters
-default_loop_schedule = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
-days = 2  # how recent a fp file has to be to be considered
+DEFAULT_SCHEDULE = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
+DAYS = 2  # how recent a fp file has to be to be considered
 
 # widget parameters
-width = 250
-height = 250
-margin = 10
-line = 12
-header = 32
+font = xp.Font_Proportional
+_, line_height, _ = xp.getFontDimensions(font)
+WIDTH = 250
+HEIGHT = 250
+HEIGHT_MIN = 100
+MARGIN = 10
+LINE = line_height + 4
+HEADER = 32
 
 
 class Async(threading.Thread):
@@ -207,7 +210,7 @@ class SimBrief(object):
         }
 
     def find_or_retrieve_fp(self, ofp: dict) -> str | bool:
-        recent = datetime.now() - timedelta(days=days)
+        recent = datetime.now() - timedelta(days=DAYS)
         self.origin = ofp.get('origin').get('icao_code')
         self.destination = ofp.get('destination').get('icao_code')
         if not (self.origin and self.destination):
@@ -310,7 +313,7 @@ def extract_descent_winds(ofp: dict, layout: str) -> list:
 
 class PythonInterface(object):
 
-    loop_schedule = default_loop_schedule
+    loop_schedule = DEFAULT_SCHEDULE
 
     def __init__(self) -> None:
         self.plugin_name = f"{plugin_name} - {__VERSION__}"
@@ -376,22 +379,22 @@ class PythonInterface(object):
         """Main menu Callback"""
         if menuItem == 1:
             if not self.settings_widget:
-                self.create_settings_widget(200, 600)
+                self.create_settings_widget(100, 400)
             elif not xp.isWidgetVisible(self.settings_widget):
                 xp.showWidget(self.settings_widget)
 
-    def create_settings_widget(self, x: int = 10, y: int = 800):
+    def create_settings_widget(self, x: int = 100, y: int = 400):
 
-        left, top, right, bottom = x + margin, y - header - margin, x + width - margin, y - height + margin
+        left, top, right, bottom = x + MARGIN, y - HEADER - MARGIN, x + WIDTH - MARGIN, y - HEIGHT + MARGIN
 
         # main windows
-        self.settings_widget = xp.createWidget(x, y, x+width, y-height, 1, "Settings", 1, 0, xp.WidgetClass_MainWindow)
+        self.settings_widget = xp.createWidget(x, y, x+WIDTH, y-HEIGHT, 1, f"SimBrief2Zibo {__VERSION__}", 1, 0, xp.WidgetClass_MainWindow)
         xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowHasCloseBoxes, 1)
 
         # PilotID sub window
-        self.pilot_id_widget = xp.createWidget(left, top, right, top - line - margin*2, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
+        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - MARGIN*2, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
 
-        l, t, r, b = left + margin, top - margin, right - margin, top - margin - line
+        l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - MARGIN - LINE
         caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
                                   self.pilot_id_widget, xp.WidgetClass_Caption)
         self.pilot_id_input = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
@@ -401,26 +404,25 @@ class PythonInterface(object):
         self.save_button = xp.createWidget(l + 150, t, r, b, 1, "SAVE", 0,
                                            self.pilot_id_widget, xp.WidgetClass_Button)
         self.edit_button = xp.createWidget(l + 150, t, r, b, 1, "CHANGE", 0,
-                                           self.pilot_id_widget, xp.WidgetClass_Button)
-        t = b - margin*2
+        t = b - MARGIN*2
         # info message line
-        self.info_line = xp.createWidget(left, t, right, t - line, 1, "", 0,
+        self.info_line = xp.createWidget(left, t, right, t - LINE, 1, "", 0,
                                          self.settings_widget, xp.WidgetClass_Caption)
-        t -= line + margin
+        t -= LINE + MARGIN
         # OFP info sub window
         self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
-        t -= margin
-        b = bottom + margin
+        t -= MARGIN
+        b = bottom + MARGIN
         w = r - l
-        cap = xp.createWidget(l, t, r, t - line, 1, 'OFP INFO:', 0,
+        cap = xp.createWidget(l, t, r, t - LINE, 1, 'OFP INFO:', 0,
                                   self.fp_info_widget, xp.WidgetClass_Caption)
         self.fp_info_caption.append(cap)
-        t -= line + margin
+        t -= LINE + MARGIN
         while t > b:
-            cap = xp.createWidget(l, t, r, t - line, 1, '--', 0,
+            cap = xp.createWidget(l, t, r, t - LINE, 1, '--', 0,
                                   self.fp_info_widget, xp.WidgetClass_Caption)
             self.fp_info_caption.append(cap)
-            t -= line
+            t -= LINE
 
         self.setup_widget()
 
