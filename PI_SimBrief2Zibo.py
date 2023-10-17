@@ -178,11 +178,12 @@ class SimBrief(object):
             self.fp_filename = fp_filename
             data = self.parse_ofp(ofp)
             if self.create_xml_file(data, fp_filename):
-                self.message = f"All set: {fp_filename}"
+                self.message = f"All set!"
                 # get more info
                 weights = ofp.get('weights')
                 u = ofp.get('params').get('units')
                 self.fp_info = {
+                    'co route': fp_filename,
                     'oew': f"{weights.get('oew')} {u}",
                     'pax': f"{weights.get('pax_count_actual')}",
                     'cargo': f"{weights.get('cargo')} {u}",
@@ -352,6 +353,11 @@ class PythonInterface(object):
         self.main_menu = self.create_main_menu()
 
     @property
+    def zibo_loaded(self) -> bool:
+        _, acf_path = xp.getNthAircraftModel(0)
+        return 'B737-800X' in acf_path
+
+    @property
     def engines_started(self) -> bool:
         values = []
         xp.getDatavi(self.engines_burning_fuel, values, count=2)
@@ -390,6 +396,7 @@ class PythonInterface(object):
         # main windows
         self.settings_widget = xp.createWidget(x, y, x+WIDTH, y-HEIGHT, 1, f"SimBrief2Zibo {__VERSION__}", 1, 0, xp.WidgetClass_MainWindow)
         xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowHasCloseBoxes, 1)
+        xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
 
         # PilotID sub window
         self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - MARGIN*2, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
@@ -399,19 +406,24 @@ class PythonInterface(object):
                                   self.settings_widget, xp.WidgetClass_Caption)
         self.pilot_id_input = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
                                               self.settings_widget, xp.WidgetClass_TextField)
+        xp.setWidgetProperty(self.pilot_id_input, xp.Property_MaxCharacters, 10)
         self.pilot_id_caption = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
                                                 self.settings_widget, xp.WidgetClass_Caption)
         self.save_button = xp.createWidget(l + 150, t, r, b, 1, "SAVE", 0,
                                            self.settings_widget, xp.WidgetClass_Button)
         self.edit_button = xp.createWidget(l + 150, t, r, b, 1, "CHANGE", 0,
                                            self.settings_widget, xp.WidgetClass_Button)
+
         t = b - MARGIN*2
         # info message line
         self.info_line = xp.createWidget(left, t, right, t - LINE, 1, "", 0,
                                          self.settings_widget, xp.WidgetClass_Caption)
+        xp.setWidgetProperty(self.info_line, xp.Property_CaptionLit, 1)
+
         t -= LINE + MARGIN
         # OFP info sub window
         self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
+        xp.setWidgetProperty(self.fp_info_widget, xp.Property_SubWindowType, xp.SubWindowStyle_SubWindow)
         t -= MARGIN
         b = bottom + MARGIN
         w = r - l
@@ -436,13 +448,17 @@ class PythonInterface(object):
         if xp.getWidgetDescriptor(self.info_line) != self.message:
             xp.setWidgetDescriptor(self.info_line, self.message)
 
-        if self.fp_info:
-            if not self.fp_info.get('zfw') in xp.getWidgetDescriptor(self.fp_info_caption[-1]):
+        if self.fp_info and self.zibo_loaded:
+            if not any(self.fp_info.get('zfw') in xp.getWidgetDescriptor(el) for el in self.fp_info_caption):
                 self.populate_info_widget()
             if not xp.isWidgetVisible(self.fp_info_widget):
+                for line in self.fp_info_caption:
+                    xp.showWidget(line)
                 xp.showWidget(self.fp_info_widget)
         else:
             xp.hideWidget(self.fp_info_widget)
+            for line in self.fp_info_caption:
+                xp.hideWidget(line)
 
         if inMessage == xp.Message_CloseButtonPushed:
             if self.settings_widget:
@@ -481,8 +497,7 @@ class PythonInterface(object):
         """Loop Callback"""
         t = datetime.now().strftime('%H:%M:%S')
         start = perf_counter()
-        _, acf_path = xp.getNthAircraftModel(0)
-        if 'B737-800X' in acf_path and self.pilot_id:
+        if self.zibo_loaded and self.pilot_id:
             if not self.flight_started:
                 if not self.fp_checked and self.at_gate:
                     # check fp
@@ -520,26 +535,26 @@ class PythonInterface(object):
                             self.request_id
                         )
                         self.async_task.start()
-                    self.loop_schedule = default_loop_schedule
+                    self.loop_schedule = DEFAULT_SCHEDULE
                 elif not self.flight_started and not self.at_gate:
                     # flight mode, do nothing
                     self.flight_started = True
                     self.message = "Have a nice flight!"
-                    self.loop_schedule = default_loop_schedule * 10
+                    self.loop_schedule = DEFAULT_SCHEDULE * 10
             elif self.at_gate:
                 # look for a new OFP for a turnaround flight
                 self.flight_started = False
                 self.fp_checked = False
                 self.fp_info = {}
                 self.message = "Looking for a new OFP ..."
-                self.loop_schedule = default_loop_schedule
+                self.loop_schedule = DEFAULT_SCHEDULE
         else:
             # nothing to do
-            if not 'B737-800X' in acf_path:
+            if not self.zibo_loaded:
                 self.message = "Zibo not detected"
             elif not self.pilot_id:
                 self.message = "SimBrief PilotID required"
-            self.loop_schedule = default_loop_schedule * 5
+            self.loop_schedule = DEFAULT_SCHEDULE * 5
 
         return self.loop_schedule
 
@@ -572,7 +587,7 @@ class PythonInterface(object):
         # loopCallback
         self.loop = self.loopCallback
         self.loop_id = xp.createFlightLoop(self.loop, phase=1)
-        xp.scheduleFlightLoop(self.loop_id, interval=default_loop_schedule)
+        xp.scheduleFlightLoop(self.loop_id, interval=DEFAULT_SCHEDULE)
         return 1
 
     def XPluginStop(self):
