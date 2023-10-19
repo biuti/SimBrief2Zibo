@@ -580,13 +580,19 @@ class PythonInterface(object):
             return False
 
     def save_settings(self):
-        user_id = int(xp.getWidgetDescriptor(self.pilot_id_input).strip())
-        settings = {'settings': {'pilot_id': user_id}}
-        with open(self.config_file, 'w') as f:
-            json.dump(settings, f)
-        # check file
-        self.load_settings()
-        self.setup_widget()
+        user_id = xp.getWidgetDescriptor(self.pilot_id_input).strip()
+        if not user_id.isdigit():
+            # user gave something else in input
+            self.message = "pilotID has to be a number"
+            xp.setWidgetDescriptor(self.pilot_id_input, "")
+        else:
+            settings = {'settings': {'pilot_id': int(user_id)}}
+            with open(self.config_file, 'w') as f:
+                json.dump(settings, f)
+            # check file
+            self.load_settings()
+            self.message = 'settings saved'
+            self.setup_widget()
 
     def XPluginStart(self):
         return self.plugin_name, self.plugin_sig, self.plugin_desc
