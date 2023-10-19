@@ -6,7 +6,11 @@ Fetch latest user OFP Data from SimBrief and creates the file ZIBO B737-800 modi
 - If a recent flightplan file for the flight is not available, it downloads the fms file for the OFP flight from SimBrief
 
 ## How to use
-It works only with Zibo B737-800 modified. It requires user SimBrief PilotID to work. Just save it in the plugin settings.
+It works only with Zibo B737-800 modified. It requires user SimBrief Pilot ID to work. Just save it in the plugin settings.
+> [!NOTE]
+> Pilot ID is a number, you can find it in your SimBrief Account Settings.
+> Not your username, nor your password
+
 When Zibo aircraft is selected, at the gate with engines off, the plugin will start to look for latest OFP on SimBrief.
 It will then look for a suitable flightplan. Checks for fms or fmx files with _originICAO_ and _destinationICAO_ in filename. If it finds one (created in the last 48 hours), uses the same filename for the xml file. Otherwise, it will download from SimBrief the fms file for the OFP and will name both fms and xml files _OriginICAODestinationICAO_
 Once the engines are started, the plugin will stop looking for a plugin until on the ground and engines cutoff again, then will look for a new turnaround OFP.
