@@ -598,6 +598,9 @@ class PythonInterface(object):
         xp.scheduleFlightLoop(self.loop_id, interval=DEFAULT_SCHEDULE)
         return 1
 
+    def XPluginDisable(self):
+        pass
+
     def XPluginStop(self):
         # Called once by X-Plane on quit (or when plugins are exiting as part of reload)
         xp.destroyFlightLoop(self.loop_id)
