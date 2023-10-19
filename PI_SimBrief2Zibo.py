@@ -127,9 +127,18 @@ class SimBrief(object):
         return result
 
     def query(self, url: str) -> dict | None:
+        response = None
         try:
             response = request.urlopen(url)
-        except (SSLCertVerificationError, HTTPError, URLError) as e:
+        except HTTPError as e:
+            if e.code == 400:
+                # HTTP Error 400: Bad Request
+                self.message = f"Error: is your pilotID correct?"
+            else:
+                self.message = f"Error trying to connect to SimBrief"
+            self.error = e
+            return
+        except (SSLCertVerificationError, URLError) as e:
             # change link to unsecure protocol to avoid SSL error in some weird systems
             print(f" *** get_ofp() had to run in unsecure mode: {e}")
             try:
@@ -140,9 +149,11 @@ class SimBrief(object):
             except (HTTPError, URLError) as e:
                 self.message = f"Error trying to connect to SimBrief"
                 self.error = e
+                return
         except Exception as e:
             self.message = f"Error trying to connect to SimBrief"
             self.error = e
+            return
         return json.loads(response.read())
 
     def download(self, source: str, destination: Path) -> Path | bool:
