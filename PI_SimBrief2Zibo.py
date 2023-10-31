@@ -43,7 +43,7 @@ DAYS = 2  # how recent a fp file has to be to be considered
 font = xp.Font_Proportional
 _, line_height, _ = xp.getFontDimensions(font)
 WIDTH = 250
-HEIGHT = 250
+HEIGHT = 280
 HEIGHT_MIN = 100
 MARGIN = 10
 LINE = line_height + 4
@@ -440,6 +440,11 @@ class PythonInterface(object):
         xp.setWidgetProperty(self.info_line, xp.Property_CaptionLit, 1)
 
         t -= LINE + MARGIN
+        # reload OFP button
+        self.reload_button = xp.createWidget(l + 150, t, r, t - LINE, 0, "RELOAD", 0,
+                                             self.settings_widget, xp.WidgetClass_Button)
+
+        t -= LINE + MARGIN
         # OFP info sub window
         self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
         xp.setWidgetProperty(self.fp_info_widget, xp.Property_SubWindowType, xp.SubWindowStyle_SubWindow)
@@ -467,7 +472,7 @@ class PythonInterface(object):
         if xp.getWidgetDescriptor(self.info_line) != self.message:
             xp.setWidgetDescriptor(self.info_line, self.message)
 
-        if self.fp_info and self.zibo_loaded:
+        if self.zibo_loaded and self.fp_checked and self.fp_info:
             if not any(self.fp_info.get('zfw') in xp.getWidgetDescriptor(el) for el in self.fp_info_caption):
                 self.populate_info_widget()
             if not xp.isWidgetVisible(self.fp_info_widget):
@@ -478,6 +483,11 @@ class PythonInterface(object):
             xp.hideWidget(self.fp_info_widget)
             for line in self.fp_info_caption:
                 xp.hideWidget(line)
+
+        if self.fp_checked and not self.flight_started:
+            xp.showWidget(self.reload_button)
+        else:
+            xp.hideWidget(self.reload_button)
 
         if inMessage == xp.Message_CloseButtonPushed:
             if self.settings_widget:
@@ -492,6 +502,10 @@ class PythonInterface(object):
                 xp.setWidgetDescriptor(self.pilot_id_input, f"{self.pilot_id}")
                 self.pilot_id = None
                 self.setup_widget()
+                return 1
+            if inParam1 == self.reload_button:
+                self.fp_checked = False
+                self.message = 'OFP reload requested'
                 return 1
         return 0
 
@@ -538,6 +552,9 @@ class PythonInterface(object):
                                 elif fp_info:
                                     # we have a valid response
                                     self.request_id, self.fp_info = request_id, fp_info
+                                    self.fp_checked = True
+                                elif self.fp_info:
+                                    # reload was requested, no no OFP found, we do not need to keep checking right now
                                     self.fp_checked = True
                             # reset download
                             self.async_task = False
