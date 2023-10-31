@@ -274,7 +274,7 @@ class SimBrief(object):
         file = Path(self.path, filename)
         tree = ET.ElementTree(root)
         try:
-            tree.write(file)
+            tree.write(file, encoding='utf-8', xml_declaration=True)
             return True
         except Exception as e:
             self.message = "Error writing xml file"
