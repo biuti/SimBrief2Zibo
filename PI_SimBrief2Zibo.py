@@ -24,6 +24,7 @@ from time import perf_counter
 try:
     from XPPython3 import xp
 except ImportError:
+    print('xp module not found')
     pass
 
 
@@ -40,13 +41,17 @@ DEFAULT_SCHEDULE = 15  # positive numbers are seconds, 0 disabled, negative numb
 DAYS = 2  # how recent a fp file has to be to be considered
 
 # widget parameters
-font = xp.Font_Proportional
-_, line_height, _ = xp.getFontDimensions(font)
+try:
+    font = xp.Font_Proportional
+    _, line_height, _ = xp.getFontDimensions(font)
+    LINE = line_height + 4
+except NameError:
+    LINE = 16
+
 WIDTH = 250
-HEIGHT = 280
+HEIGHT = 320
 HEIGHT_MIN = 100
 MARGIN = 10
-LINE = line_height + 4
 HEADER = 32
 
 
