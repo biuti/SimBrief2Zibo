@@ -12,9 +12,11 @@ LICENSE file in the root directory of this source tree.
 import os
 import json
 import threading
+import shutil
 
 from pathlib import Path
 from urllib import request, parse
+from http.client import HTTPResponse
 from urllib.error import URLError, HTTPError
 from ssl import SSLCertVerificationError
 from xml.etree import ElementTree as ET
@@ -94,7 +96,10 @@ class Async(threading.Thread):
 
 class SimBrief(object):
 
-    def __init__(self, pilot_id: str, path: Path, request_id: str = None) -> None:
+    source = 'xml'
+    uplink_filename = 'b738x'
+
+    def __init__(self, pilot_id: str, path: Path, request_id: str | None) -> None:
         self.pilot_id = pilot_id
         self.path = path
         self.request_id = request_id
@@ -102,25 +107,30 @@ class SimBrief(object):
         self.origin = None  # Departure ICAO
         self.destination = None  # Destination ICAO
         self.fp_link = None  # link to the SimBrief fms file
-        self.fp_filename = None  # fms/fmx filename
+        self.coroute_filename = None  # fms/fmx filename
         self.error = None
         self.message = None
         self.fp_info = None
         self.result = False
 
     @property
-    def url(self) -> str | bool:
+    def xml_url(self) -> str:
+        return f"https://www.simbrief.com/api/xml.fetcher.php?userid={self.pilot_id}"
+
+    @property
+    def json_url(self) -> str:
         return f"https://www.simbrief.com/api/xml.fetcher.php?userid={self.pilot_id}&json=1"
 
     @staticmethod
-    def run(pilot_id: str, path: Path, request_id=None) -> tuple[Exception | None, dict]:
+    def run(pilot_id: str, path: Path, request_id=None) -> dict:
         """
         return
-        {'error', 'request_id', 'fp_filename', 'message', 'fp_info'}
+        {'error', 'request_id', 'coroute_filename', 'message', 'fp_info'}
         """
 
         s = SimBrief(pilot_id, path, request_id)
-        response = s.query(s.url)
+        url = s.xml_url if s.source == 'xml' else s.json_url
+        response = s.query(url)
         if not s.error:
             s.process(response)
         result = {
@@ -131,7 +141,7 @@ class SimBrief(object):
         }
         return result
 
-    def query(self, url: str) -> dict | None:
+    def query(self, url: str) -> HTTPResponse | None:
         response = None
         try:
             response = request.urlopen(url)
@@ -159,7 +169,7 @@ class SimBrief(object):
             self.message = f"Error trying to connect to SimBrief"
             self.error = e
             return
-        return json.loads(response.read())
+        return response
 
     def download(self, source: str, destination: Path) -> Path | bool:
         try:
@@ -181,48 +191,62 @@ class SimBrief(object):
             return False
         return destination
 
-    def process(self, response: dict):
-        request_id = response.get('params').get('request_id')
+    def process(self, response: HTTPResponse):
+        """ only XML now"""
+        xml_source = ET.parse(response)
+        data = xml_source.getroot()
+
+        request_id = data.find('params').find('request_id').text
         if self.request_id == request_id:
             # no new OFP
             self.message = "No new OFP available"
             return
-        ofp = response
+        ofp = shrink_xml(data)
         fp_filename = self.find_or_retrieve_fp(ofp)
         if fp_filename:
             self.request_id = request_id
-            self.fp_filename = fp_filename
+            self.coroute_filename = fp_filename
 
             # delete old XML file from the FMS plans folder
-            self.delete_old_xml_files()
+            # self.delete_old_xml_files()
 
-            data = self.parse_ofp(ofp)
-            if self.create_xml_file(data, fp_filename):
-                self.message = f"All set!"
+            parsed = self.parse_ofp(ofp)
+            if self.create_xml_file(ofp, parsed):
+                self.message = "All set!"
                 # get more info
-                weights = ofp.get('weights')
-                u = ofp.get('params').get('units')
+                callsign = ofp.find('atc').find('callsign').text
+                weights = ofp.find('weights')
+                u = ofp.find('params').find('units').text
+                oew = weights.find('oew').text
+                cargo = weights.find('cargo').text
+                payload = weights.find('payload').text
+                zfw = weights.find('est_zfw').text
+                tow = weights.find('est_tow').text
+                ldw = weights.find('est_ldw').text
                 self.fp_info = {
+                    'callsign': callsign,
                     'co route': fp_filename,
-                    'oew': f"{weights.get('oew')} {u}",
-                    'pax': f"{weights.get('pax_count_actual')}",
-                    'cargo': f"{weights.get('cargo')} {u}",
-                    'payload': f"{weights.get('payload')} {u}",
-                    'zfw': f"{weights.get('est_zfw')} {u}"
+                    'oew': f"{oew} {u} ({weight_transform(oew, u)})",
+                    'pax': f"{weights.find('pax_count_actual').text}",
+                    'cargo': f"{cargo} {u} ({weight_transform(cargo, u)})",
+                    'payload': f"{payload} {u} ({weight_transform(payload, u)})",
+                    'zfw': f"{zfw} {u} ({weight_transform(zfw, u)})",
+                    'tow': f"{tow} {u} ({weight_transform(tow, u)})",
+                    'ldw': f"{ldw} {u} ({weight_transform(ldw, u)})"
                 }
 
-    def parse_ofp(self, ofp: json) -> dict:
+    def parse_ofp(self, ofp: ET.Element) -> dict:
         """
         LIDO: \n400 288/021 -54  400 320/020 -54  400 332/028 -55  350 330/022 -44\n380 272/019 -50  380 310/016 -50  380 333/024 -51  310 343/025 -34\n360 285/017 -46  360 319/017 -46  360 331/023 -46  200 005/009 -10\n340 301/016 -42  340 326/019 -42  340 328/021 -42  150 297/004 +02\n320 313/019 -36  320 328/021 -37  320 332/024 -37  100 258/001 +11
         """
-        layout = ofp.get('params').get('ofp_layout')
-        fix = ofp.get('navlog').get('fix')[-1]
-        if fix.get('ident') == ofp.get('destination').get('icao_code'):
-            dest_isa = int(fix.get('oat_isa_dev'))
+        layout = ofp.find('params').find('ofp_layout').text
+        fix = ofp.find('navlog').findall('fix')[-1]
+        if fix.find('ident').text == ofp.find('destination').find('icao_code').text:
+            dest_isa = int(fix.find('oat_isa_dev').text)
         else:
             # use avg isa dev
-            dest_isa = int(ofp.get('general').get('avg_temp_dev'))
-        dest_metar = ofp.get('destination').get('metar')
+            dest_isa = int(ofp.find('general').find('avg_temp_dev').text)
+        dest_metar = ofp.find('destination').find('metar').text
 
         return {
             'dest_isa': dest_isa,
@@ -230,12 +254,22 @@ class SimBrief(object):
             'winds': extract_descent_winds(ofp, layout=layout)
         }
 
-    def find_or_retrieve_fp(self, ofp: dict) -> str | bool:
-        recent = datetime.now() - timedelta(days=DAYS)
-        self.origin = ofp.get('origin').get('icao_code')
-        self.destination = ofp.get('destination').get('icao_code')
+    def find_or_retrieve_fp(self, ofp: ET.Element) -> str | bool:
+
+        self.origin = ofp.find('origin').find('icao_code').text
+        self.destination = ofp.find('destination').find('icao_code').text
         if not (self.origin and self.destination):
             return False
+
+        # download the fms file
+        self.fp_link = ofp.find('fms_downloads').find('directory').text + ofp.find('fms_downloads').find('xpe').find('link').text
+        uplink_file = Path(self.path, self.uplink_filename + '.fms')
+        result = self.download(self.fp_link, uplink_file)
+        if not result:
+            return False
+
+        # look for a COROUTE file, else copy the downloaded one
+        recent = datetime.now() - timedelta(days=DAYS)
         files = [
             f for f in self.path.iterdir()
             if f.suffix in ('.fms', '.fmx')
@@ -246,17 +280,14 @@ class SimBrief(object):
         if files:
             # user already created a FP for this OFP
             file = max(files, key=lambda x: x.stat().st_ctime)
-            return file.stem
         else:
-            # we need to download FP from SimBrief
-            self.fp_link = ofp.get('fms_downloads').get('directory') + ofp.get('fms_downloads').get('xpe').get('link')
+            # we need to copy FP from SimBrief
             file = Path(self.path, self.origin + self.destination + '.fms')
-            result = self.download(self.fp_link, file)
-            if result:
-                return result.stem
-        return False
+            shutil.copy(uplink_file, Path(self.path, file))
 
-    def create_xml_file(self, data: dict, fp_filename: str) -> bool:
+        return file.stem
+
+    def create_xml_file(self, ofp: ET.Element, data: dict, filename: str = uplink_filename) -> bool:
         """we need to recreate the plan_html parts we use as in LIDO format"""
 
         # const
@@ -270,37 +301,63 @@ class SimBrief(object):
         parts[0] = parts[0].replace('Z', ' ')
         dest_metar = f"{self.destination}\nSA  {' '.join(parts)}\n"
 
-        root = ET.Element("OFP")
-        text = ET.SubElement(root, "text")
-        plan_html = ET.SubElement(text, "plan_html")
+        plan_html = ofp.find('text').find('plan_html')
+
         plan_html.text = summary_tag + dest_isa + wind_tag + winds + wx_tag + dest_metar
 
-        filename = fp_filename + '.xml'
+        filename = filename + '.xml'
         file = Path(self.path, filename)
-        tree = ET.ElementTree(root)
+        tree = ET.ElementTree(ofp)
         try:
             tree.write(file, encoding='utf-8', xml_declaration=True)
             return True
         except Exception as e:
-            self.message = "Error writing xml file"
+            self.message = f"Error writing {filename}"
             self.error = e
             return False
 
     def delete_old_xml_files(self):
         for f in self.path.iterdir():
-            if f.suffix == '.xml':
+            if f.stem == self.uplink_filename:
                 f.unlink()
 
-def extract_descent_winds(ofp: dict, layout: str) -> list:
+
+def shrink_xml(data: ET.Element) -> ET.Element:
+    tag_list = [
+        'fetch', 'aircraft', 'times', 'impacts', 'crew', 'notams', 'weather', 'sigmets', 'tracks', 
+        'database_updates', 'files', 'images', 'links', 'prefile', 
+        'vatsim_prefile', 'ivao_prefile', 'pilotedge_prefile', 'poscon_prefile', 'map_data', 'api_params'
+    ]
+    for tag in tag_list:
+        results = data.findall(tag)
+        if results:
+            # print(f"found {tag}")
+            for el in results:
+                data.remove(el)
+    for tag in ('origin', 'destination', 'alternate'):
+        el = data.find(tag)
+        if el:
+            taf = el.find('taf')
+            if taf:
+                el.remove(taf)
+            for notam in el.findall('notam'):
+                el.remove(notam)
+            for taf in el.findall('taf'):
+                el.remove(taf)
+    return data
+
+
+def extract_descent_winds(ofp: ET.Element, layout: str) -> list:
     """
     Descent wind have to be extracted from plan_html section, so it's dependant on OFP layout
     """
+    source = ofp.find('text').find('plan_html').text
     if any(s in layout for s in ('RYR', 'LIDO', 'THY', 'ACA')):
-        text = ofp.get('text').get('plan_html').split('DESCENT')[1].split('\n\n')[0]
+        text = source.split('DESCENT')[1].split('\n\n')[0]
         lines = text.split('\n')[1:]
         return [tuple(l.split()[-3:]) for l in lines]
     elif layout == 'UAL 2018':
-        text = ofp.get('text').get('plan_html').split('DESCENT WINDS')[1].split('STARTFWZPAD')[0]
+        text = source.split('DESCENT WINDS')[1].split('STARTFWZPAD')[0]
         lines = text.split('</tr><tr>')[1:5]
         winds = []
         for l in lines:
@@ -308,13 +365,13 @@ def extract_descent_winds(ofp: dict, layout: str) -> list:
             rows = iter(table)
             winds.append(tuple(row.text.strip().replace('FL', '') or '+15' for row in rows))
     elif layout == 'DAL':
-        text = ofp.get('text').get('plan_html').split('DESCENT FORECAST WINDS')[1].split('*')[0]
+        text = source.split('DESCENT FORECAST WINDS')[1].split('*')[0]
         lines = text.split('\n')[1:-1]
         data = list(zip(*[line.split() for line in lines]))
         idx100 = list(map(lambda x:x[0], data)).index("10000") + 1
         return [(el[0][:-2], f"{el[1][:2]}0/{el[1][-3:]}", '+15') for el in data][:idx100]
     elif layout == 'SWA':
-        text = ofp.get('text').get('plan_html').split('DESCENT WINDS')[1].split('\n\n')[0]
+        text = source.split('DESCENT WINDS')[1].split('\n\n')[0]
         lines = text.strip().split('\n')
         data = list(zip(*[line.split() for line in lines]))
         return [
@@ -326,7 +383,7 @@ def extract_descent_winds(ofp: dict, layout: str) -> list:
             for el in data
         ]
     elif layout == 'KLM':
-        text = ofp.get('text').get('plan_html').split('CRZ ALT')[1].split('DEFRTE')[0]
+        text = source.split('CRZ ALT')[1].split('DEFRTE')[0]
         lines = lines = text.replace('FL', '').split('\n')[:3]
         return [(*l.split()[-2:], '+15') for l in lines]
     else:
@@ -334,6 +391,31 @@ def extract_descent_winds(ofp: dict, layout: str) -> list:
         # AFR, DLH, UAE, JZA, JBU, GWI, EZY, ETD, EIN, BER, BAW, AWE have no 738 or are not operative
         return [('', '', '')]*5
     return winds
+
+
+def str2int(string: str) -> int:
+    v = string.strip()
+    if len(v) == 0:
+        return 0
+    sign = 1
+    if not v.isdigit():
+        if v[1:].isdigit() and v[0] in ('-', '+'):
+            if v[0] == '-':
+                sign = -1
+            v = v[1:]
+        else:
+            raise ValueError(f"Input string {v} is not a valid integer.")
+    return int(v) * sign
+
+
+def weight_transform(weight: str, unit: str) -> int:
+    if unit == 'kgs':
+        t = 'lbs'
+        m = 2.205
+    else:
+        t = 'kgs'
+        m = 0.4535
+    return f"{round(str2int(weight) * m)} {t}"
 
 
 class PythonInterface(object):
