@@ -1,9 +1,9 @@
 # SimBrief2Zibo for X-Plane 12
-Fetch latest user OFP Data from SimBrief and creates the file ZIBO B737-800 modified requires to import winds info.
+Fetch latest user OFP Data from SimBrief and creates the file ZIBO B737-800 modified requires for the UPLINK feature.
 
 ## Features
 - Creates both _b738x.xml_ and _b738x.fms_ files needed for Zibo ver.5.3+ UPLINK feature from latest SimBrief OFP
-- To use standard COROUTE option, if a recent flightplan file for the flight is not available, it copies the created fms file with the name reported in plugin widget
+- To use standard CO ROUTE option, if a recent flightplan file for the flight is not available, it copies the created fms file with the name reported in plugin widget
 
 ## How to use
 It works only with Zibo B737-800 modified. It requires user SimBrief Pilot ID to work. Just save it in the plugin settings.
@@ -12,9 +12,11 @@ It works only with Zibo B737-800 modified. It requires user SimBrief Pilot ID to
 > Not your username, nor your password
 
 When Zibo aircraft is selected, **at the gate with engines off**, the plugin will start to look for latest OFP on SimBrief.
-It will then create the files needed for the UPLINK function, and look for a suitable flightplan for the COROUTE function. 
+It will then create the files needed for the UPLINK function, and look for a suitable flightplan for the CO ROUTE function. 
 You don't need to move or delete any file, the plugin manages them on its own.
-Checks for fms or fmx files with _originICAO_ and _destinationICAO_ in filename. If it doesn't find one (created in the last 48 hours), it copies the fms file with name _OriginICAODestinationICAO_
+Checks for fms or fmx files with _originICAO_ and _destinationICAO_ in filename. If it doesn't find one (created in the last 48 hours), it copies the fms file with name _OriginICAODestinationICAO_.
+
+_fmx_ format files are not compatible with UPLINK feature; if an fmx file for the route is found, it will be kept for CO ROUTE option, and the _b738x.fms_ file will be downloaded from SimBrief.
 
 If you start X-Plane before creating the OFP in SimBrief, or you need to change it, you can still do so **as long as you are on the ground with both engines off**. Create the new OFP and then click the **RELOAD** button on the plugin widget. The process could take up to 20 seconds.
 
