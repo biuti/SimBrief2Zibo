@@ -16,8 +16,8 @@ import shutil
 
 from pathlib import Path
 from urllib import request, parse
-from http.client import HTTPResponse
 from urllib.error import URLError, HTTPError
+from http.client import HTTPResponse
 from ssl import SSLCertVerificationError
 from xml.etree import ElementTree as ET
 from datetime import datetime, timedelta
@@ -261,14 +261,12 @@ class SimBrief(object):
         if not (self.origin and self.destination):
             return False
 
-        # download the fms file
-        self.fp_link = ofp.find('fms_downloads').find('directory').text + ofp.find('fms_downloads').find('xpe').find('link').text
+        # user could have downloaded a fms file from Navigraph, which contains 
+        # SID and STAR.
+        # There could be a fmx file from FMC. it's not usable for UPLINK, just for CO ROUTE
+        # look for a CO ROUTE file, else copy the downloaded one
+        file = None
         uplink_file = Path(self.path, self.uplink_filename + '.fms')
-        result = self.download(self.fp_link, uplink_file)
-        if not result:
-            return False
-
-        # look for a COROUTE file, else copy the downloaded one
         recent = datetime.now() - timedelta(days=DAYS)
         files = [
             f for f in self.path.iterdir()
@@ -278,12 +276,22 @@ class SimBrief(object):
             and self.destination in f.stem
         ]
         if files:
-            # user already created a FP for this OFP
+            # user already has a FP for this OFP
             file = max(files, key=lambda x: x.stat().st_ctime)
+
+        if not file or file.suffix == '.fmx':
+            # need to download the fms file from SimBrief
+            self.fp_link = ofp.find('fms_downloads').find('directory').text + ofp.find('fms_downloads').find('xpe').find('link').text
+            result = self.download(self.fp_link, uplink_file)
+            if not result:
+                return False
+            if not file:
+                # copy the fms file to be used as COROUTE
+                file = Path(self.path, self.origin + self.destination + '.fms')
+                shutil.copy(uplink_file, file)
         else:
-            # we need to copy FP from SimBrief
-            file = Path(self.path, self.origin + self.destination + '.fms')
-            shutil.copy(uplink_file, Path(self.path, file))
+            # copy the retrieved fms file for UPLINK feature
+            shutil.copy(file, uplink_file)
 
         return file.stem
 
