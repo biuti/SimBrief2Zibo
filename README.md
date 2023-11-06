@@ -16,9 +16,14 @@ It will then create the files needed for the UPLINK function, and look for a sui
 You don't need to move or delete any file, the plugin manages them on its own.
 Checks for fms or fmx files with _originICAO_ and _destinationICAO_ in filename. If it doesn't find one (created in the last 48 hours), it copies the fms file with name _OriginICAODestinationICAO_.
 
+If a Navigraph generated flight plan is found, departure and arrival procedures will be imported using the UPLINK feature.
+
 _fmx_ format files are not compatible with UPLINK feature; if an fmx file for the route is found, it will be kept for CO ROUTE option, and the _b738x.fms_ file will be downloaded from SimBrief.
 
 If you start X-Plane before creating the OFP in SimBrief, or you need to change it, you can still do so **as long as you are on the ground with both engines off**. Create the new OFP and then click the **RELOAD** button on the plugin widget. The process could take up to 20 seconds.
+
+> [!IMPORTANT]
+> **If you want to use your flight plan file for the UPLINK feature, it needs to be in the FMS plan folder before Zibo aircraft is loaded**
 
 Once the engines are started, the plugin will stop looking for a plugin until on the ground and with engines cutoff again, then will look for a new turnaround OFP.
 
