@@ -44,13 +44,15 @@ DAYS = 2  # how recent a fp file has to be to be considered
 
 # widget parameters
 try:
-    font = xp.Font_Proportional
-    _, line_height, _ = xp.getFontDimensions(font)
-    LINE = line_height + 4
+    FONT = xp.Font_Proportional
+    FONT_WIDTH, FONT_HEIGHT, _ = xp.getFontDimensions(FONT)
+    xp.log(f"font width: {FONT_WIDTH} | height: {FONT_HEIGHT}")
+    xp.log(f"characters in {250 * 2 - 20}: {int((250 * 2 - 20) / FONT_WIDTH)}")
 except NameError:
-    LINE = 16
+    FONT_WIDTH, FONT_HEIGHT = 10, 10
 
-WIDTH = 250
+LINE = FONT_HEIGHT + 4
+WIDTH = 240
 HEIGHT = 320
 HEIGHT_MIN = 100
 MARGIN = 10
