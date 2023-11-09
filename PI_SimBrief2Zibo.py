@@ -258,17 +258,18 @@ class SimBrief(object):
 
     def find_or_retrieve_fp(self, ofp: ET.Element) -> str | bool:
 
-        self.origin = ofp.find('origin').find('icao_code').text
-        self.destination = ofp.find('destination').find('icao_code').text
+        orig = ofp.find('origin')
+        dest = ofp.find('destination')
+        self.origin = orig.find('icao_code').text
+        self.destination = dest.find('icao_code').text
         if not (self.origin and self.destination):
             return False
 
-        # user could have downloaded a fms file from Navigraph, which contains 
-        # SID and STAR.
+        # ver. 5.6+ fms file not needed for UPLINK feature anymore
+        # user could have downloaded a fms file from Navigraph, which contains SID and STAR.
         # There could be a fmx file from FMC. it's not usable for UPLINK, just for CO ROUTE
-        # look for a CO ROUTE file, else copy the downloaded one
+        # look for a CO ROUTE file
         file = None
-        uplink_file = Path(self.path, self.uplink_filename + '.fms')
         recent = datetime.now() - timedelta(days=DAYS)
         files = [
             f for f in self.path.iterdir()
@@ -280,20 +281,18 @@ class SimBrief(object):
         if files:
             # user already has a FP for this OFP
             file = max(files, key=lambda x: x.stat().st_ctime)
-
-        if not file or file.suffix == '.fmx':
+        else:
             # need to download the fms file from SimBrief
-            self.fp_link = ofp.find('fms_downloads').find('directory').text + ofp.find('fms_downloads').find('xpe').find('link').text
-            result = self.download(self.fp_link, uplink_file)
+            file = Path(self.path, self.origin + self.destination + '.fms')
+            fms_downloads = ofp.find('fms_downloads')
+            self.fp_link = fms_downloads.find('directory').text + fms_downloads.find('xpe').find('link').text
+            result = self.download(self.fp_link, file)
             if not result:
                 return False
-            if not file:
-                # copy the fms file to be used as COROUTE
-                file = Path(self.path, self.origin + self.destination + '.fms')
-                shutil.copy(uplink_file, file)
-        else:
-            # copy the retrieved fms file for UPLINK feature
-            shutil.copy(file, uplink_file)
+            #! test: insert dep and arr procedures in downloaded fms file
+            dep, arr = extract_dep_arr(ofp)
+            if dep or arr:
+                insert_dep_arr(file, dep, arr)
 
         return file.stem
 
@@ -336,8 +335,9 @@ def shrink_xml(data: ET.Element) -> ET.Element:
     tag_list = [
         'fetch', 'aircraft', 'times', 'impacts', 'crew', 'notams', 'weather', 'sigmets', 'tracks', 
         'database_updates', 'files', 'images', 'links', 'prefile', 
-        'vatsim_prefile', 'ivao_prefile', 'pilotedge_prefile', 'poscon_prefile', 'map_data', 'api_params'
+        'vatsim_prefile', 'ivao_prefile', 'pilotedge_prefile', 'poscon_prefile', 'map_data'
     ]
+
     for tag in tag_list:
         results = data.findall(tag)
         if results:
@@ -354,7 +354,85 @@ def shrink_xml(data: ET.Element) -> ET.Element:
                 el.remove(notam)
             for taf in el.findall('taf'):
                 el.remove(taf)
+
     return data
+
+
+def extract_dep_arr(ofp: ET.Element) -> tuple[list, list]:
+    #! test
+    # see if we are able to mimic Navigraph file
+    orig = ofp.find('origin')
+    dest = ofp.find('destination')
+    dep_icao = orig.find('icao_code').text
+    arr_icao = dest.find('icao_code').text
+    rte = ofp.find('api_params').find('route').text.split()
+    dep = []
+    arr = []
+
+    if rte:
+        # Departure
+        dep_rwy = orig.find('plan_rwy').text
+        if dep_rwy:
+            # we have a dep. rwy
+            dep.append(f"DEPRWY RW{dep_rwy}")
+        if rte[0].startswith(dep_icao):
+            rte.pop(0)
+        if len(rte) > 1:
+            if '.' in rte[0]:
+                # we should have SID.TRANS
+                sid, trans = rte[0].split('.')
+                dep.extend([
+                    f"SID {sid}",
+                    f"SIDTRANS {trans}"
+                ])
+            elif len([c for c in rte[0] if c.isdigit()]) == 1:
+                # we should have SID
+                dep.append(f"SID {rte[0]}")
+                if not any(s.isdigit() for s in rte[1]):
+                    dep.append(f"SIDTRANS {rte[1]}")
+        # Arrival
+        arr_rwy = dest.find('plan_rwy').text
+        if arr_rwy:
+            arr.append(f"DESRWY RW{arr_rwy}")
+        des = None
+        if rte[-1].startswith(arr_icao):
+            des = rte.pop[-1]
+        if len(rte) > 3 and rte[0] != rte[-1]:
+            if '.' in rte[-1]:
+                # we should have STAR.TRANS
+                star, trans = rte[-1].split('.')
+                arr.extend([
+                    f"STAR {star}",
+                    f"STARTRANS {trans}"
+                ])
+            elif (len([c for c in rte[-1] if c.isdigit()]) == 1 or rte[-1].endswith(arr_rwy)):
+                # we should have STAR
+                arr.append(f"STAR {rte[-1]}")
+                if not any(s.isdigit() for s in rte[-2]):
+                    arr.append(f"STARTRANS {rte[-2]}")
+        if des and '/' in des:
+            _, app = des.split('/')
+            arr.append(f"APP {app}")
+    return dep, arr
+
+
+def insert_dep_arr(file: Path, dep: list, arr: list) -> None:
+    if dep or arr:
+        # insert Navigraph format details in fms file
+        with open(file, mode='r+', encoding='utf-8') as f:
+            content = f.readlines()
+            if dep:
+                idx = content.index(next(l for l in content if l.startswith('ADEP')))
+                for line in dep:
+                    idx += 1
+                    content.insert(idx, line + '\n')
+            if arr:
+                idx = content.index(next(l for l in content if l.startswith('ADES')))
+                for line in arr:
+                    idx += 1
+                    content.insert(idx, line + '\n')
+            f.seek(0)
+            f.writelines(content)
 
 
 def extract_descent_winds(ofp: ET.Element, layout: str) -> list:
