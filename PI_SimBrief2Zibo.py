@@ -12,7 +12,6 @@ LICENSE file in the root directory of this source tree.
 import os
 import json
 import threading
-import shutil
 
 from pathlib import Path
 from urllib import request, parse
@@ -53,6 +52,7 @@ except NameError:
 
 LINE = FONT_HEIGHT + 4
 WIDTH = 240
+ATIS_WIDTH = WIDTH * 2
 HEIGHT = 320
 HEIGHT_MIN = 100
 MARGIN = 10
@@ -226,6 +226,8 @@ class SimBrief(object):
                 tow = weights.find('est_tow').text
                 ldw = weights.find('est_ldw').text
                 self.fp_info = {
+                    'origin': self.origin.upper().strip(),
+                    'destination': self.destination.upper().strip(),
                     'callsign': callsign,
                     'co route': fp_filename,
                     'oew': f"{oew} {u} ({weight_transform(oew, u)})",
@@ -329,6 +331,77 @@ class SimBrief(object):
         for f in self.path.iterdir():
             if f.stem == self.uplink_filename:
                 f.unlink()
+
+
+class Atis(object):
+
+    def __init__(self, icao: str) -> None:
+        self.icao = icao
+        self.error = None
+        self.atis_info = None
+        self.result = False
+
+    @property
+    def url(self) -> str:
+        return f"https://atis.report/a/{self.icao}"
+
+    @staticmethod
+    def run(icao: str) -> dict:
+        """
+        return
+        {'error', 'request_id', 'coroute_filename', 'message', 'fp_info'}
+        """
+
+        a = Atis(icao)
+        response = a.query()
+        if not a.error:
+            a.process(response)
+        result = {
+            'error': a.error,
+            'atis': a.atis_info
+        }
+        return result
+
+    def query(self) -> HTTPResponse | None:
+        response = None
+        try:
+            query = request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0'})
+            response = request.urlopen(query)
+        except HTTPError as e:
+            if e.code == 500:
+                # HTTP Error 500: Internal Server Error
+                self.atis_info = "Error: ICAO does not exist"
+            else:
+                self.atis_info = "Error trying to connect to DATIS server"
+            self.error = e
+            return
+        except (SSLCertVerificationError, URLError) as e:
+            # change link to unsecure protocol to avoid SSL error in some weird systems
+            try:
+                parsed = parse.urlparse(self.url)
+                parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
+                link = parse.urlunparse(parsed)
+                query = request.Request(link, headers={'User-Agent': 'Mozilla/5.0'})
+                response = request.urlopen(query)
+            except (HTTPError, URLError) as e:
+                self.atis_info = "Error trying to connect to DATIS server"
+                self.error = e
+                return
+        except Exception as e:
+            self.atis_info = "Error trying to connect to DATIS server"
+            self.error = e
+            return
+        return response
+
+    def process(self, response: HTTPResponse) -> None:
+        data = response.read().decode()
+        if '<div class="atis-text">' not in data:
+            # DATIS not available
+            self.atis_info = f"D-ATIS not available for {self.icao}"
+            return
+        atis = data.split('<div class="atis-text">')[1].split('</div>')[0]\
+            .replace('\n\t', ' ').replace('\r\n', ' ').strip()
+        self.atis_info = atis
 
 
 def shrink_xml(data: ET.Element) -> ET.Element:
@@ -529,8 +602,13 @@ class PythonInterface(object):
         self.config_file = Path(self.prefs, 'simbrief2zibo.prf')
         self.pilot_id = None  # SimBrief UserID, int
         self.async_task = False
+        self.async_atis = False
         self.request_id = None  # OFP generated ID
         self.fp_info = {}  # information to display in the settings window
+
+        # D-ATIS init
+        self.atis_info = []  # # information to display in the D-ATIS window
+        self.atis_request = False  # D-ATIS request ICAO
 
         # status flags
         self.flight_started = False  # tracks simulation phase
@@ -542,6 +620,8 @@ class PythonInterface(object):
         # widget
         self.settings_widget = None
         self.fp_info_caption = []
+        self.atis_widget = None
+        self.atis_caption = []
         self.message = ""  # text displayed in widget info_line
 
         # create main menu and widget
@@ -593,11 +673,19 @@ class PythonInterface(object):
         self.change_group_mode(self.fp_info_caption, 'show')
         xp.showWidget(self.fp_info_widget)
 
+    def hide_atis_info_widget(self) -> None:
+        self.change_group_mode(self.atis_caption, 'hide')
+
+    def show_atis_info_widget(self) -> None:
+        self.change_group_mode(self.atis_caption, 'show')
+
     def create_main_menu(self):
         # create Menu
         menu = xp.createMenu('SimBrief2Zibo', handler=self.main_menu_callback)
         # add Menu Items
         xp.appendMenuItem(menu, 'Settings', 1)
+        # add ATIS widget
+        xp.appendMenuItem(menu, 'ATIS', 2)
         return menu
 
     def main_menu_callback(self, menuRef, menuItem):
@@ -607,6 +695,11 @@ class PythonInterface(object):
                 self.create_settings_widget(100, 400)
             elif not xp.isWidgetVisible(self.settings_widget):
                 xp.showWidget(self.settings_widget)
+        if menuItem == 2:
+            if not self.atis_widget:
+                self.create_atis_widget(100, 800)
+            elif not xp.isWidgetVisible(self.atis_widget):
+                xp.showWidget(self.atis_widget)
 
     def create_settings_widget(self, x: int = 100, y: int = 400):
 
@@ -671,6 +764,37 @@ class PythonInterface(object):
         xp.addWidgetCallback(self.settings_widget, self.settingsWidgetHandlerCB)
         xp.setKeyboardFocus(self.pilot_id_input)
 
+    def create_atis_widget(self, x: int = 100, y: int = 800):
+        width = ATIS_WIDTH
+        left, top, right, bottom = x + MARGIN, y - HEADER - MARGIN, x + width - MARGIN, y - HEIGHT + MARGIN
+
+        # main windows
+        self.atis_widget = xp.createWidget(x, y, x+width, y-HEIGHT, 1, f"D-ATIS widget", 1, 0, xp.WidgetClass_MainWindow)
+        xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 1)
+        xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
+
+        # Buttons sub window
+        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - MARGIN*2, 1, "", 0,
+                                               self.atis_widget, xp.WidgetClass_SubWindow)
+        l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - MARGIN - LINE
+        self.dep_atis_button = xp.createWidget(l, t, l+100, b, 1, f"DEP", 0,
+                                               self.atis_widget, xp.WidgetClass_Button)
+        self.arr_atis_button = xp.createWidget(r-100, t, r, b, 1, f"ARR", 0,
+                                               self.atis_widget, xp.WidgetClass_Button)
+
+        t = b - LINE
+        b = bottom + LINE
+        while t > b:
+            cap = xp.createWidget(left, t, right, t - LINE, 1, '--', 0,
+                                  self.atis_widget, xp.WidgetClass_Caption)
+            xp.setWidgetProperty(cap, xp.Property_CaptionLit, 1)
+            self.atis_caption.append(cap)
+            t -= LINE
+
+        # Register our widget handler
+        self.atisWidgetHandlerCB = self.atisWidgetHandler
+        xp.addWidgetCallback(self.atis_widget, self.atisWidgetHandlerCB)
+
     def settingsWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
         if xp.getWidgetDescriptor(self.info_line) != self.message:
             xp.setWidgetDescriptor(self.info_line, self.message)
@@ -721,9 +845,101 @@ class PythonInterface(object):
             xp.showWidget(self.pilot_id_input)
             xp.showWidget(self.save_button)
 
-    def populate_info_widget(self):
-        for i, (k, v) in enumerate(self.fp_info.items(), 1):
+    def atisWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+        if self.zibo_loaded and self.fp_info:
+            if self.fp_info['origin'] not in xp.getWidgetDescriptor(self.dep_atis_button):
+                xp.setWidgetDescriptor(self.dep_atis_button, self.fp_info['origin'])
+                xp.showWidget(self.dep_atis_button)
+            if self.fp_info['destination'] not in xp.getWidgetDescriptor(self.arr_atis_button):
+                xp.setWidgetDescriptor(self.arr_atis_button, self.fp_info['destination'])
+                xp.showWidget(self.arr_atis_button)
+            if self.atis_info:
+                if not any(self.atis_info[0] == xp.getWidgetDescriptor(el) for el in self.atis_caption):
+                    self.populate_atis_widget()
+                if not self.is_visible(self.atis_caption):
+                    self.show_atis_info_widget()
+            else:
+                self.hide_atis_info_widget()
+
+            if self.atis_request:
+                # we have an ATIS request
+                if self.async_atis:
+                    # we already started a SimBrief async instance
+                    if not self.async_atis.pending():
+                        # job ended
+                        self.async_atis.join()
+                        if isinstance(self.async_atis.result, Exception):
+                            # a non managed error occurred
+                            self.atis_info = ["An unknown error occurred"]
+                            xp.log(f" *** Unmanaged error in async task {self.async_atis.pid}: {self.async_atis.result}")
+                        else:
+                            # result: {error, atis_info}
+                            error, result = self.async_atis.result.values()
+                            if error:
+                                # a managed error occurred
+                                self.atis_info = ["Error retrieving D-ATIS"]
+                                xp.log(f" *** D-ATIS error in async task {self.async_atis.pid}: {error}")
+                            elif result:
+                                # we have a valid response
+                                self.format_atis_info(result)
+                        # reset download
+                        self.async_atis = False
+                        self.atis_request = False
+                    else:
+                        # no answer yet, waiting ...
+                        pass
+                else:
+                    # we need to start an async task
+                    self.clear_atis_widget()
+                    self.atis_info = ["starting D-ATIS query ..."]
+                    self.async_atis = Async(
+                        Atis.run,
+                        self.atis_request,
+                    )
+                    self.async_atis.start()
+
+            elif inMessage == xp.Msg_PushButtonPressed:
+                icao = self.fp_info['origin' if inParam1 == self.dep_atis_button else 'destination']
+                xp.log(f"ATIS request: {icao}")
+                self.atis_request = icao
+                return 1
+        else:
+            self.hide_atis_info_widget()
+            xp.hideWidget(self.dep_atis_button)
+            xp.hideWidget(self.arr_atis_button)
+
+        if inMessage == xp.Message_CloseButtonPushed:
+            if self.atis_widget:
+                xp.hideWidget(self.atis_widget)
+            return 1
+
+        return 0
+
+    def populate_info_widget(self) -> None:
+        for i, (k, v) in enumerate(list(self.fp_info.items())[2:], 1):
             xp.setWidgetDescriptor(self.fp_info_caption[i], f"{k.upper()}: {v}")
+
+    def format_atis_info(self, string: str) -> None:
+        # create lines from D-ATIS string
+        width = ATIS_WIDTH - 2 * MARGIN
+        words = string.split(' ')
+        result = ['']
+        for word in words:
+            if xp.measureString(FONT, result[-1] + ' ' + word) < width:
+                result[-1] += word if not result[-1] else ' ' + word
+            else:
+                result.append(word)
+        self.atis_info = result
+
+    def populate_atis_widget(self) -> None:
+        caption = len(self.atis_caption)
+        for i, el in enumerate(self.atis_info):
+            if i < caption:
+                xp.setWidgetDescriptor(self.atis_caption[i], el)
+
+    def clear_atis_widget(self) -> None:
+        for line in self.atis_caption:
+            xp.setWidgetDescriptor(line, '--')
 
     def loopCallback(self, lastCall, elapsedTime, counter, refCon):
         """Loop Callback"""
@@ -839,5 +1055,6 @@ class PythonInterface(object):
         # Called once by X-Plane on quit (or when plugins are exiting as part of reload)
         xp.destroyFlightLoop(self.loop_id)
         xp.destroyWidget(self.settings_widget)
+        xp.destroyWidget(self.atis_widget)
         xp.destroyMenu(self.main_menu)
         xp.log(f"flightloop, widget, menu destroyed, exiting ...")
