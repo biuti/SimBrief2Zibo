@@ -150,9 +150,9 @@ class SimBrief(object):
         except HTTPError as e:
             if e.code == 400:
                 # HTTP Error 400: Bad Request
-                self.message = f"Error: is your pilotID correct?"
+                self.message = "Error: is your pilotID correct?"
             else:
-                self.message = f"Error trying to connect to SimBrief"
+                self.message = "Error trying to connect to SimBrief"
             self.error = e
             return
         except (SSLCertVerificationError, URLError) as e:
@@ -273,9 +273,9 @@ class SimBrief(object):
         files = [
             f for f in self.path.iterdir()
             if f.suffix in ('.fms', '.fmx')
-            and datetime.fromtimestamp(f.stat().st_ctime) > recent
             and f.stem.startswith(self.origin)
             and self.destination in f.stem
+            and datetime.fromtimestamp(f.stat().st_ctime) > recent
         ]
         if files:
             # user already has a FP for this OFP
@@ -362,6 +362,7 @@ def extract_descent_winds(ofp: ET.Element, layout: str) -> list:
     Descent wind have to be extracted from plan_html section, so it's dependant on OFP layout
     """
     source = ofp.find('text').find('plan_html').text
+
     if any(s in layout for s in ('RYR', 'LIDO', 'THY', 'ACA')):
         text = source.split('DESCENT')[1].split('\n\n')[0]
         lines = text.split('\n')[1:]
@@ -490,6 +491,30 @@ class PythonInterface(object):
     def at_gate(self) -> bool:
         return self.on_ground and not self.engines_started
 
+    def is_visible(self, element) -> bool:
+        if isinstance(element, list):
+            if len(element):
+                return xp.isWidgetVisible(element[0])
+            else:
+                return False
+        return xp.isWidgetVisible(element)
+
+    def change_group_mode(self, group: list, mode: str = 'show') -> None:
+        if mode == 'show' and not all(xp.isWidgetVisible(el) for el in group):
+            for el in group:
+                xp.showWidget(el)
+        elif mode == 'hide' and any(xp.isWidgetVisible(el) for el in group):
+            for el in group:
+                xp.hideWidget(el)
+
+    def hide_fp_info_widget(self) -> None:
+        self.change_group_mode(self.fp_info_caption, 'hide')
+        xp.hideWidget(self.fp_info_widget)
+
+    def show_fp_info_widget(self) -> None:
+        self.change_group_mode(self.fp_info_caption, 'show')
+        xp.showWidget(self.fp_info_widget)
+
     def create_main_menu(self):
         # create Menu
         menu = xp.createMenu('SimBrief2Zibo', handler=self.main_menu_callback)
@@ -510,24 +535,26 @@ class PythonInterface(object):
         left, top, right, bottom = x + MARGIN, y - HEADER - MARGIN, x + WIDTH - MARGIN, y - HEIGHT + MARGIN
 
         # main windows
-        self.settings_widget = xp.createWidget(x, y, x+WIDTH, y-HEIGHT, 1, f"SimBrief2Zibo {__VERSION__}", 1, 0, xp.WidgetClass_MainWindow)
+        self.settings_widget = xp.createWidget(x, y, x+WIDTH, y-HEIGHT, 1, f"SimBrief2Zibo {__VERSION__}", 1,
+                                               0, xp.WidgetClass_MainWindow)
         xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowHasCloseBoxes, 1)
         xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
 
         # PilotID sub window
-        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - MARGIN*2, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
+        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - MARGIN*2, 1, "", 0,
+                                               self.settings_widget, xp.WidgetClass_SubWindow)
 
         l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - MARGIN - LINE
         caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
                                   self.settings_widget, xp.WidgetClass_Caption)
-        self.pilot_id_input = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
+        self.pilot_id_input = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
                                               self.settings_widget, xp.WidgetClass_TextField)
         xp.setWidgetProperty(self.pilot_id_input, xp.Property_MaxCharacters, 10)
-        self.pilot_id_caption = xp.createWidget(l + 90, t, l + 147, b, 1, "", 0,
+        self.pilot_id_caption = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
                                                 self.settings_widget, xp.WidgetClass_Caption)
-        self.save_button = xp.createWidget(l + 150, t, r, b, 1, "SAVE", 0,
+        self.save_button = xp.createWidget(l + 148, t, r, b, 1, "SAVE", 0,
                                            self.settings_widget, xp.WidgetClass_Button)
-        self.edit_button = xp.createWidget(l + 150, t, r, b, 1, "CHANGE", 0,
+        self.edit_button = xp.createWidget(l + 148, t, r, b, 1, "CHANGE", 0,
                                            self.settings_widget, xp.WidgetClass_Button)
 
         t = b - MARGIN*2
@@ -543,13 +570,14 @@ class PythonInterface(object):
 
         t -= LINE + MARGIN
         # OFP info sub window
-        self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.settings_widget, xp.WidgetClass_SubWindow)
+        self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.settings_widget,
+                                              xp.WidgetClass_SubWindow)
         xp.setWidgetProperty(self.fp_info_widget, xp.Property_SubWindowType, xp.SubWindowStyle_SubWindow)
         t -= MARGIN
         b = bottom + MARGIN
         w = r - l
         cap = xp.createWidget(l, t, r, t - LINE, 1, 'OFP INFO:', 0,
-                                  self.settings_widget, xp.WidgetClass_Caption)
+                              self.settings_widget, xp.WidgetClass_Caption)
         self.fp_info_caption.append(cap)
         t -= LINE + MARGIN
         while t > b:
@@ -561,25 +589,21 @@ class PythonInterface(object):
         self.setup_widget()
 
         # Register our widget handler
-        self.widgetHandlerCB = self.widgetHandler
-        xp.addWidgetCallback(self.settings_widget, self.widgetHandlerCB)
+        self.settingsWidgetHandlerCB = self.settingsWidgetHandler
+        xp.addWidgetCallback(self.settings_widget, self.settingsWidgetHandlerCB)
         xp.setKeyboardFocus(self.pilot_id_input)
 
-    def widgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+    def settingsWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
         if xp.getWidgetDescriptor(self.info_line) != self.message:
             xp.setWidgetDescriptor(self.info_line, self.message)
 
         if self.zibo_loaded and self.fp_checked and self.fp_info:
             if not any(self.fp_info.get('zfw') in xp.getWidgetDescriptor(el) for el in self.fp_info_caption):
                 self.populate_info_widget()
-            if not xp.isWidgetVisible(self.fp_info_widget):
-                for line in self.fp_info_caption:
-                    xp.showWidget(line)
-                xp.showWidget(self.fp_info_widget)
+            if not self.is_visible(self.fp_info_widget):
+                self.show_fp_info_widget()
         else:
-            xp.hideWidget(self.fp_info_widget)
-            for line in self.fp_info_caption:
-                xp.hideWidget(line)
+            self.hide_fp_info_widget()
 
         if self.fp_checked and not self.flight_started:
             xp.showWidget(self.reload_button)
@@ -655,6 +679,7 @@ class PythonInterface(object):
                                     self.fp_checked = True
                             # reset download
                             self.async_task = False
+                            self.loop_schedule = DEFAULT_SCHEDULE
                         else:
                             # no answer yet, waiting ...
                             pass
@@ -668,7 +693,7 @@ class PythonInterface(object):
                             self.request_id
                         )
                         self.async_task.start()
-                    self.loop_schedule = DEFAULT_SCHEDULE
+                        self.loop_schedule = 3
                 elif not self.flight_started and not self.at_gate:
                     # flight mode, do nothing
                     self.flight_started = True
