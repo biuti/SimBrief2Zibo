@@ -45,8 +45,6 @@ DAYS = 2  # how recent a fp file has to be to be considered
 try:
     FONT = xp.Font_Proportional
     FONT_WIDTH, FONT_HEIGHT, _ = xp.getFontDimensions(FONT)
-    xp.log(f"font width: {FONT_WIDTH} | height: {FONT_HEIGHT}")
-    xp.log(f"characters in {250 * 2 - 20}: {int((250 * 2 - 20) / FONT_WIDTH)}")
 except NameError:
     FONT_WIDTH, FONT_HEIGHT = 10, 10
 
@@ -56,7 +54,7 @@ ATIS_WIDTH = WIDTH * 2
 HEIGHT = 320
 HEIGHT_MIN = 100
 MARGIN = 10
-HEADER = 32
+HEADER = 16
 
 
 class Async(threading.Thread):
@@ -432,8 +430,8 @@ def shrink_xml(data: ET.Element) -> ET.Element:
 
 
 def extract_dep_arr(ofp: ET.Element) -> tuple[list, list]:
-    #! test
-    # see if we are able to mimic Navigraph file
+    """ Try to extract SID and STAR procedures from xml file
+        to mimic Navigraph fms file """
     orig = ofp.find('origin')
     dest = ofp.find('destination')
     dep_icao = orig.find('icao_code').text
@@ -701,6 +699,44 @@ class PythonInterface(object):
             xp.setWidgetProperty(self.atis_popout_button, xp.Property_ButtonType, xp.LittleDownArrow)
             xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 0)
 
+    def check_atis_request(self):
+        if self.async_atis:
+            # we already started a SimBrief async instance
+            if not self.async_atis.pending():
+                # job ended
+                self.async_atis.join()
+                if isinstance(self.async_atis.result, Exception):
+                    # a non managed error occurred
+                    self.atis_info = ["An unknown error occurred"]
+                    xp.log(f" *** Unmanaged error in async task {self.async_atis.pid}: {self.async_atis.result}")
+                else:
+                    # result: {error, atis_info}
+                    error, result = self.async_atis.result.values()
+                    if error:
+                        # a managed error occurred
+                        self.atis_info = ["Error retrieving D-ATIS"]
+                        xp.log(f" *** D-ATIS error in async task {self.async_atis.pid}: {error}")
+                    elif result:
+                        # we have a valid response
+                        self.format_atis_info(result)
+                        xp.log(f" --- D-ATIS Valid response: {result}")
+                # reset download
+                self.async_atis = False
+                self.atis_request = False
+            else:
+                # no answer yet, waiting ...
+                pass
+        else:
+            # we need to start an async task
+            xp.log(f" ** {datetime.now().strftime('%H:%M:%S')} loop - starting new D-ATIS async ...")
+            self.clear_atis_widget()
+            self.atis_info = ["starting D-ATIS query ..."]
+            self.async_atis = Async(
+                Atis.run,
+                self.atis_request,
+            )
+            self.async_atis.start()
+
     def create_main_menu(self):
         # create Menu
         menu = xp.createMenu('SimBrief2Zibo', handler=self.main_menu_callback)
@@ -907,46 +943,7 @@ class PythonInterface(object):
 
             if self.atis_request:
                 # we have an ATIS request
-                if self.async_atis:
-                    # we already started a SimBrief async instance
-                    if not self.async_atis.pending():
-                        # job ended
-                        self.async_atis.join()
-                        if isinstance(self.async_atis.result, Exception):
-                            # a non managed error occurred
-                            self.atis_info = ["An unknown error occurred"]
-                            xp.log(f" *** Unmanaged error in async task {self.async_atis.pid}: {self.async_atis.result}")
-                        else:
-                            # result: {error, atis_info}
-                            error, result = self.async_atis.result.values()
-                            if error:
-                                # a managed error occurred
-                                self.atis_info = ["Error retrieving D-ATIS"]
-                                xp.log(f" *** D-ATIS error in async task {self.async_atis.pid}: {error}")
-                            elif result:
-                                # we have a valid response
-                                self.format_atis_info(result)
-                        # reset download
-                        self.async_atis = False
-                        self.atis_request = False
-                    else:
-                        # no answer yet, waiting ...
-                        pass
-                else:
-                    # we need to start an async task
-                    self.clear_atis_widget()
-                    self.atis_info = ["starting D-ATIS query ..."]
-                    self.async_atis = Async(
-                        Atis.run,
-                        self.atis_request,
-                    )
-                    self.async_atis.start()
-
-            elif inMessage == xp.Msg_PushButtonPressed:
-                icao = self.fp_info['origin' if inParam1 == self.dep_atis_button else 'destination']
-                xp.log(f"ATIS request: {icao}")
-                self.atis_request = icao
-                return 1
+                self.check_atis_request()
         else:
             self.hide_atis_info_widget()
             xp.hideWidget(self.dep_atis_button)
