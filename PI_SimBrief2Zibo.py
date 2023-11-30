@@ -617,10 +617,12 @@ class PythonInterface(object):
         # load settings
         self.load_settings()
 
-        # widget
-        self.settings_widget = None
+        # widget and windows
+        self.details_widget = None
+        self.details_window = None
         self.fp_info_caption = []
         self.atis_widget = None
+        self.atis_window = None
         self.atis_caption = []
         self.message = ""  # text displayed in widget info_line
 
@@ -679,110 +681,146 @@ class PythonInterface(object):
     def show_atis_info_widget(self) -> None:
         self.change_group_mode(self.atis_caption, 'show')
 
+    def switch_details_window(self):
+        if xp.windowIsPoppedOut(self.details_window):
+            xp.setWindowPositioningMode(self.details_window, xp.WindowPositionFree)
+            xp.setWidgetProperty(self.details_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
+            xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowHasCloseBoxes, 1)
+        else:
+            xp.setWindowPositioningMode(self.details_window, xp.WindowPopOut)
+            xp.setWidgetProperty(self.details_popout_button, xp.Property_ButtonType, xp.LittleDownArrow)
+            xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowHasCloseBoxes, 0)
+
+    def switch_atis_window(self):
+        if xp.windowIsPoppedOut(self.atis_window):
+            xp.setWindowPositioningMode(self.atis_window, xp.WindowPositionFree)
+            xp.setWidgetProperty(self.atis_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
+            xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 1)
+        else:
+            xp.setWindowPositioningMode(self.atis_window, xp.WindowPopOut)
+            xp.setWidgetProperty(self.atis_popout_button, xp.Property_ButtonType, xp.LittleDownArrow)
+            xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 0)
+
     def create_main_menu(self):
         # create Menu
         menu = xp.createMenu('SimBrief2Zibo', handler=self.main_menu_callback)
         # add Menu Items
-        xp.appendMenuItem(menu, 'Settings', 1)
-        # add ATIS widget
-        xp.appendMenuItem(menu, 'ATIS', 2)
+        xp.appendMenuItem(menu, 'OFP Details', 1)
+        # add D-ATIS widget
+        xp.appendMenuItem(menu, 'D-ATIS', 2)
         return menu
 
     def main_menu_callback(self, menuRef, menuItem):
         """Main menu Callback"""
         if menuItem == 1:
-            if not self.settings_widget:
-                self.create_settings_widget(100, 400)
-            elif not xp.isWidgetVisible(self.settings_widget):
-                xp.showWidget(self.settings_widget)
+            if not self.details_widget:
+                self.create_details_widget(100, 400)
+            elif not xp.isWidgetVisible(self.details_widget):
+                xp.showWidget(self.details_widget)
         if menuItem == 2:
-            if not self.atis_widget:
+            if not self.atis_window:
                 self.create_atis_widget(100, 800)
-            elif not xp.isWidgetVisible(self.atis_widget):
-                xp.showWidget(self.atis_widget)
+            elif not xp.getWindowIsVisible(self.atis_window):
+                xp.setWindowIsVisible(self.atis_window, 1)
 
-    def create_settings_widget(self, x: int = 100, y: int = 400):
+    def create_details_widget(self, x: int = 100, y: int = 400):
 
-        left, top, right, bottom = x + MARGIN, y - HEADER - MARGIN, x + WIDTH - MARGIN, y - HEIGHT + MARGIN
+        left, top, right, bottom = x + MARGIN, y - HEADER, x + WIDTH - MARGIN, y - HEIGHT + MARGIN
 
-        # main windows
-        self.settings_widget = xp.createWidget(x, y, x+WIDTH, y-HEIGHT, 1, f"SimBrief2Zibo {__VERSION__}", 1,
-                                               0, xp.WidgetClass_MainWindow)
-        xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowHasCloseBoxes, 1)
-        xp.setWidgetProperty(self.settings_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
+        # main window
+        self.details_widget = xp.createWidget(x, y, x+WIDTH, y-HEIGHT, 1, f"SimBrief2Zibo {__VERSION__}", 1,
+                                              0, xp.WidgetClass_MainWindow)
+        xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowHasCloseBoxes, 1)
+        xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
 
+        # window popout button
+        self.details_popout_button = xp.createWidget(right-FONT_WIDTH, top, right, top-FONT_HEIGHT, 1, "", 0,
+                                                     self.details_widget, xp.WidgetClass_Button)
+        xp.setWidgetProperty(self.details_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
+
+        top -= 26
         # PilotID sub window
-        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - MARGIN*2, 1, "", 0,
-                                               self.settings_widget, xp.WidgetClass_SubWindow)
+        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - 2*MARGIN, 1, "", 0,
+                                               self.details_widget, xp.WidgetClass_SubWindow)
 
         l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - MARGIN - LINE
         caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
-                                  self.settings_widget, xp.WidgetClass_Caption)
+                                  self.details_widget, xp.WidgetClass_Caption)
         self.pilot_id_input = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
-                                              self.settings_widget, xp.WidgetClass_TextField)
+                                              self.details_widget, xp.WidgetClass_TextField)
         xp.setWidgetProperty(self.pilot_id_input, xp.Property_MaxCharacters, 10)
         self.pilot_id_caption = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
-                                                self.settings_widget, xp.WidgetClass_Caption)
+                                                self.details_widget, xp.WidgetClass_Caption)
         self.save_button = xp.createWidget(l + 148, t, r, b, 1, "SAVE", 0,
-                                           self.settings_widget, xp.WidgetClass_Button)
+                                           self.details_widget, xp.WidgetClass_Button)
         self.edit_button = xp.createWidget(l + 148, t, r, b, 1, "CHANGE", 0,
-                                           self.settings_widget, xp.WidgetClass_Button)
+                                           self.details_widget, xp.WidgetClass_Button)
 
         t = b - MARGIN*2
         # info message line
         self.info_line = xp.createWidget(left, t, right, t - LINE, 1, "", 0,
-                                         self.settings_widget, xp.WidgetClass_Caption)
+                                         self.details_widget, xp.WidgetClass_Caption)
         xp.setWidgetProperty(self.info_line, xp.Property_CaptionLit, 1)
 
         t -= LINE + MARGIN
         # reload OFP button
         self.reload_button = xp.createWidget(l + 150, t, r, t - LINE, 0, "RELOAD", 0,
-                                             self.settings_widget, xp.WidgetClass_Button)
+                                             self.details_widget, xp.WidgetClass_Button)
 
         t -= LINE + MARGIN
         # OFP info sub window
-        self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.settings_widget,
+        self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.details_widget,
                                               xp.WidgetClass_SubWindow)
         xp.setWidgetProperty(self.fp_info_widget, xp.Property_SubWindowType, xp.SubWindowStyle_SubWindow)
         t -= MARGIN
         b = bottom + MARGIN
         w = r - l
         cap = xp.createWidget(l, t, r, t - LINE, 1, 'OFP INFO:', 0,
-                              self.settings_widget, xp.WidgetClass_Caption)
+                              self.details_widget, xp.WidgetClass_Caption)
         self.fp_info_caption.append(cap)
         t -= LINE + MARGIN
         while t > b:
             cap = xp.createWidget(l, t, r, t - LINE, 1, '--', 0,
-                                  self.settings_widget, xp.WidgetClass_Caption)
+                                  self.details_widget, xp.WidgetClass_Caption)
             self.fp_info_caption.append(cap)
             t -= LINE
 
         self.setup_widget()
 
+        # set underlying window
+        self.details_window = xp.getWidgetUnderlyingWindow(self.details_widget)
+        xp.setWindowTitle(self.details_window, "OFP Details")
+
         # Register our widget handler
         self.settingsWidgetHandlerCB = self.settingsWidgetHandler
-        xp.addWidgetCallback(self.settings_widget, self.settingsWidgetHandlerCB)
+        xp.addWidgetCallback(self.details_widget, self.settingsWidgetHandlerCB)
         xp.setKeyboardFocus(self.pilot_id_input)
 
     def create_atis_widget(self, x: int = 100, y: int = 800):
         width = ATIS_WIDTH
-        left, top, right, bottom = x + MARGIN, y - HEADER - MARGIN, x + width - MARGIN, y - HEIGHT + MARGIN
+        left, top, right, bottom = x + MARGIN, y - HEADER, x + width - MARGIN, y - HEIGHT + MARGIN
 
-        # main windows
-        self.atis_widget = xp.createWidget(x, y, x+width, y-HEIGHT, 1, f"D-ATIS widget", 1, 0, xp.WidgetClass_MainWindow)
+        # main window
+        self.atis_widget = xp.createWidget(x, y, x+width, y-HEIGHT, 1, "D-ATIS widget", 1, 0, xp.WidgetClass_MainWindow)
         xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 1)
         xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
 
+        # window popout button
+        self.atis_popout_button = xp.createWidget(right-FONT_WIDTH, top, right, top-FONT_HEIGHT, 1, "", 0,
+                                                  self.atis_widget, xp.WidgetClass_Button)
+        xp.setWidgetProperty(self.atis_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
+
+        top -= 26
         # Buttons sub window
-        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - MARGIN*2, 1, "", 0,
-                                               self.atis_widget, xp.WidgetClass_SubWindow)
-        l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - MARGIN - LINE
-        self.dep_atis_button = xp.createWidget(l, t, l+100, b, 1, f"DEP", 0,
+        self.atis_subwindow = xp.createWidget(left, top, right, top - LINE - 2*MARGIN, 1, "", 0,
+                                              self.atis_widget, xp.WidgetClass_SubWindow)
+        l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - LINE
+        self.dep_atis_button = xp.createWidget(l, t, l+100, b, 1, "DEP", 0,
                                                self.atis_widget, xp.WidgetClass_Button)
-        self.arr_atis_button = xp.createWidget(r-100, t, r, b, 1, f"ARR", 0,
+        self.arr_atis_button = xp.createWidget(r-100, t, r, b, 1, "ARR", 0,
                                                self.atis_widget, xp.WidgetClass_Button)
 
-        t = b - LINE
+        t = b - LINE - MARGIN
         b = bottom + LINE
         while t > b:
             cap = xp.createWidget(left, t, right, t - LINE, 1, '--', 0,
@@ -790,6 +828,10 @@ class PythonInterface(object):
             xp.setWidgetProperty(cap, xp.Property_CaptionLit, 1)
             self.atis_caption.append(cap)
             t -= LINE
+
+        # set underlying window
+        self.atis_window = xp.getWidgetUnderlyingWindow(self.atis_widget)
+        xp.setWindowTitle(self.atis_window, "D-ATIS widget")
 
         # Register our widget handler
         self.atisWidgetHandlerCB = self.atisWidgetHandler
@@ -813,11 +855,13 @@ class PythonInterface(object):
             xp.hideWidget(self.reload_button)
 
         if inMessage == xp.Message_CloseButtonPushed:
-            if self.settings_widget:
-                xp.hideWidget(self.settings_widget)
+            if self.details_widget:
+                xp.hideWidget(self.details_widget)
                 return 1
 
         if inMessage == xp.Msg_PushButtonPressed:
+            if inParam1 == self.details_popout_button:
+                self.switch_details_window()
             if inParam1 == self.save_button:
                 self.save_settings()
                 return 1
@@ -908,9 +952,20 @@ class PythonInterface(object):
             xp.hideWidget(self.dep_atis_button)
             xp.hideWidget(self.arr_atis_button)
 
+        # manage close window button
         if inMessage == xp.Message_CloseButtonPushed:
-            if self.atis_widget:
-                xp.hideWidget(self.atis_widget)
+            if self.atis_window:
+                xp.setWindowIsVisible(self.atis_window, 0)
+            return 1
+
+        # manage widget buttons
+        if inMessage == xp.Msg_PushButtonPressed:
+            if inParam1 == self.atis_popout_button:
+                self.switch_atis_window()
+            else:
+                icao = self.fp_info['origin' if inParam1 == self.dep_atis_button else 'destination']
+                xp.log(f"ATIS request: {icao}")
+                self.atis_request = icao
             return 1
 
         return 0
@@ -1042,6 +1097,8 @@ class PythonInterface(object):
         return self.plugin_name, self.plugin_sig, self.plugin_desc
 
     def XPluginEnable(self):
+        # enable features
+        xp.enableFeature("XPLM_USE_NATIVE_WIDGET_WINDOWS", 1)
         # loopCallback
         self.loop = self.loopCallback
         self.loop_id = xp.createFlightLoop(self.loop, phase=1)
@@ -1054,7 +1111,9 @@ class PythonInterface(object):
     def XPluginStop(self):
         # Called once by X-Plane on quit (or when plugins are exiting as part of reload)
         xp.destroyFlightLoop(self.loop_id)
-        xp.destroyWidget(self.settings_widget)
+        xp.destroyWidget(self.details_widget)
+        xp.destroyWindow(self.details_window)
         xp.destroyWidget(self.atis_widget)
+        xp.destroyWindow(self.atis_window)
         xp.destroyMenu(self.main_menu)
-        xp.log(f"flightloop, widget, menu destroyed, exiting ...")
+        xp.log("flightloop, widget, menu destroyed, exiting ...")
