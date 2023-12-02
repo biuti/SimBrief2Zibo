@@ -867,7 +867,7 @@ class PythonInterface(object):
                             # no D-ATIS available for the station, no need to display D-ATIS panel
                             self.datis_message = result
                         else:
-                            self.datis_message = f"{datetime.now().strftime('%H:%M:%S')} - {self.datis_request} D-ATIS:"
+                            self.datis_message = f"{datetime.utcnow().strftime('%H%M')}Z - {self.datis_request} D-ATIS:"
                             self.datis_content = self.format_atis_info(result)
                 # reset download
                 self.async_datis = False
