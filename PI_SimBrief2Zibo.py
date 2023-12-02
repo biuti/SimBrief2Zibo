@@ -9,6 +9,8 @@ This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree. 
 """
 
+from __future__ import annotations
+
 import os
 import json
 import threading
@@ -48,13 +50,8 @@ try:
 except NameError:
     FONT_WIDTH, FONT_HEIGHT = 10, 10
 
-LINE = FONT_HEIGHT + 4
-WIDTH = 240
-ATIS_WIDTH = WIDTH * 2
-HEIGHT = 320
-HEIGHT_MIN = 100
-MARGIN = 10
-HEADER = 16
+DETAILS_WIDTH = 240
+ATIS_WIDTH = DETAILS_WIDTH * 2
 
 
 class Async(threading.Thread):
@@ -578,6 +575,207 @@ def weight_transform(weight: str, unit: str) -> int:
     return f"{round(str2int(weight) * m)} {t}"
 
 
+class FloatingWidget(object):
+
+    LINE = FONT_HEIGHT + 4
+    WIDTH = 240
+    HEIGHT = 320
+    HEIGHT_MIN = 100
+    MARGIN = 10
+    HEADER = 16
+
+    left, top, right, bottom = 0, 0, 0, 0
+
+    def __init__(self, title: str, x: int, y: int, width: int = WIDTH, height: int = HEIGHT) -> None:
+
+        # main window internal margins
+        self.left, self.top, self.right, self.bottom = (
+            x + self.MARGIN,
+            y - self.HEADER,
+            x + width - self.MARGIN,
+            y - height + self.MARGIN
+        )
+        self.pilot_info_subwindow = None
+        self.info_line = None
+        self.content_widget = {
+            'subwindow': None,
+            'title': None,
+            'lines': []
+        }
+
+        # main widget
+        self.widget = xp.createWidget(x, y, x + width, y - height, 
+                                      1, title, 1, 0, xp.WidgetClass_MainWindow)
+        xp.setWidgetProperty(self.widget, xp.Property_MainWindowHasCloseBoxes, 1)
+        xp.setWidgetProperty(self.widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
+
+        # window popout button
+        self.popout_button = xp.createWidget(self.right - FONT_WIDTH, self.top, self.right, self.top - FONT_HEIGHT,
+                                              1, "", 0, self.widget, xp.WidgetClass_Button)
+        xp.setWidgetProperty(self.popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
+
+        # set underlying window
+        self.window = xp.getWidgetUnderlyingWindow(self.widget)
+        xp.setWindowTitle(self.window, title)
+
+        self.top -= 26
+
+    @property
+    def content_width(self) -> int:
+        l, _, r, _ = self.get_subwindow_margins()
+        return r - l
+
+    @staticmethod
+    def cr() -> int:
+        return FloatingWidget.LINE + FloatingWidget.MARGIN
+
+    @staticmethod
+    def check_widget_descriptor(widget, text: str) -> None:
+        if text not in xp.getWidgetDescriptor(widget):
+            xp.setWidgetDescriptor(widget, text)
+            xp.showWidget(widget)
+
+    @classmethod
+    def create_window(cls, title: str, x: int, y: int, width: int = WIDTH, height: int = HEIGHT) -> FloatingWidget:
+        return cls(title, x, y, width, height)
+
+    def get_height(self, lines: int | None = None) -> int:
+        if not lines:
+            return self.top - self.bottom
+        else:
+            return self.LINE*lines + 2*self.MARGIN
+
+    def get_subwindow_margins(self, lines: int | None = None) -> tuple[int, int, int, int]:
+        height = self.get_height(lines)
+        return self.left + self.MARGIN, self.top - self.MARGIN, self.right - self.MARGIN, self.top - height + self.MARGIN
+
+    def add_info_line(self) -> None:
+        if not self.info_line:
+            self.info_line = xp.createWidget(self.left, self.top, self.right, self.top - self.LINE,
+                                             1, "", 0, self.widget, xp.WidgetClass_Caption)
+            xp.setWidgetProperty(self.info_line, xp.Property_CaptionLit, 1)
+            self.top -= self.cr()
+
+    def check_info_line(self, message: str) -> None:
+        if xp.getWidgetDescriptor(self.info_line) != message:
+            xp.setWidgetDescriptor(self.info_line, message)
+
+    def add_button(self, text: str, subwindow: bool = False, align: str = 'left'):
+        width = int(xp.measureString(FONT, text)) + FONT_WIDTH*4
+        if align == 'left':
+            l, r = self.left + subwindow*self.MARGIN, self.left + width + subwindow*self.MARGIN
+        else:
+            l, r = self.right - width - subwindow*self.MARGIN, self.right - subwindow*self.MARGIN
+        return xp.createWidget(l, self.top, r, self.top - self.LINE,
+                               0, text, 0, self.widget, xp.WidgetClass_Button)
+
+    def add_subwindow(self, lines: int | None = None):
+        height = self.get_height(lines)
+        return xp.createWidget(self.left, self.top, self.right, self.top - height,
+                               1, "", 0, self.widget, xp.WidgetClass_SubWindow)
+
+    def add_user_info_widget(self) -> None:
+        # user info subwindow
+        self.pilot_info_subwindow = self.add_subwindow(lines=1)
+        l, t, r, b = self.get_subwindow_margins(lines=1)
+        # user info widgets
+        caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
+                                  self.widget, xp.WidgetClass_Caption)
+        self.pilot_id_input = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
+                                              self.widget, xp.WidgetClass_TextField)
+        xp.setWidgetProperty(self.pilot_id_input, xp.Property_MaxCharacters, 10)
+        self.pilot_id_caption = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
+                                                self.widget, xp.WidgetClass_Caption)
+        self.save_button = xp.createWidget(l + 148, t, r, b, 1, "SAVE", 0,
+                                           self.widget, xp.WidgetClass_Button)
+        self.edit_button = xp.createWidget(l + 148, t, r, b, 1, "CHANGE", 0,
+                                           self.widget, xp.WidgetClass_Button)
+        self.top = b - self.MARGIN*2
+
+    def add_content_widget(self, title: str = "", lines: int | None = None):
+        self.content_widget['subwindow'] = self.add_subwindow(lines=lines)
+        l, t, r, b = self.get_subwindow_margins()
+        if len(title):
+            # add title line
+            self.content_widget['title'] = xp.createWidget(l, t, r, t - self.LINE, 1, title, 0,
+                                                           self.widget, xp.WidgetClass_Caption)
+            t -= self.cr()
+        # add content lines
+        while t > b:
+            self.content_widget['lines'].append(
+                xp.createWidget(l, t, r, t - self.LINE,
+                                1, '--', 0, self.widget, xp.WidgetClass_Caption)
+            )
+            t -= self.LINE
+
+    def show_content_widget(self):
+        if not xp.isWidgetVisible(self.content_widget['subwindow']):
+            xp.showWidget(self.content_widget['subwindow'])
+            if self.content_widget['title']:
+                xp.showWidget(self.content_widget['title'])
+            for el in self.content_widget['lines']:
+                xp.showWidget(el)
+
+    def hide_content_widget(self):
+        if xp.isWidgetVisible(self.content_widget['subwindow']):
+            xp.hideWidget(self.content_widget['subwindow'])
+            if self.content_widget['title']:
+                xp.hideWidget(self.content_widget['title'])
+            for el in self.content_widget['lines']:
+                xp.hideWidget(el)
+
+    def check_content_widget(self, lines: list[tuple[str, str] or str]):
+        content = self.content_widget['lines']
+        for i, el in enumerate(lines):
+            if i < len(content):
+                text = str(el) if not isinstance(el, tuple) else  f"{el[0].upper()}: {el[1]}"
+                if not text in xp.getWidgetDescriptor(content[i]):
+                    xp.setWidgetDescriptor(content[i], text)
+
+    def populate_content_widget(self, lines: list[tuple[str, str] or str]):
+        content = self.content_widget['lines']
+        for i, el in enumerate(lines):
+            text = str(el) if not isinstance(el, tuple) else  f"{el[0].upper()}: {el[1]}"
+            xp.setWidgetDescriptor(content[i], text)
+
+    def clear_content_widget(self):
+        content = self.content_widget['lines']
+        for el in content:
+            xp.setWidgetDescriptor(el, "--")
+
+    def switch_window_position(self):
+        if xp.windowIsPoppedOut(self.window):
+            xp.setWindowPositioningMode(self.window, xp.WindowPositionFree)
+            xp.setWidgetProperty(self.popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
+            xp.setWidgetProperty(self.widget, xp.Property_MainWindowHasCloseBoxes, 1)
+        else:
+            xp.setWindowPositioningMode(self.window, xp.WindowPopOut)
+            xp.setWidgetProperty(self.popout_button, xp.Property_ButtonType, xp.LittleDownArrow)
+            xp.setWidgetProperty(self.widget, xp.Property_MainWindowHasCloseBoxes, 0)
+
+    def set_window_visible(self) -> None:
+        if not xp.getWindowIsVisible(self.window):
+            xp.setWidgetProperty(self.widget, xp.Property_MainWindowHasCloseBoxes, 1)
+            xp.setWindowIsVisible(self.window, 1)
+
+    def setup_widget(self, pilot_id: str | None = None):
+        if pilot_id:
+            xp.hideWidget(self.pilot_id_input)
+            xp.hideWidget(self.save_button)
+            xp.setWidgetDescriptor(self.pilot_id_caption, f"{pilot_id}")
+            xp.showWidget(self.pilot_id_caption)
+            xp.showWidget(self.edit_button)
+        else:
+            xp.hideWidget(self.pilot_id_caption)
+            xp.hideWidget(self.edit_button)
+            xp.showWidget(self.pilot_id_input)
+            xp.showWidget(self.save_button)
+
+    def destroy(self) -> None:
+        xp.destroyWidget(self.widget)
+        # xp.destroyWindow(self.window)
+
+
 class PythonInterface(object):
 
     loop_schedule = DEFAULT_SCHEDULE
@@ -600,13 +798,13 @@ class PythonInterface(object):
         self.config_file = Path(self.prefs, 'simbrief2zibo.prf')
         self.pilot_id = None  # SimBrief UserID, int
         self.async_task = False
-        self.async_atis = False
+        self.async_datis = False
         self.request_id = None  # OFP generated ID
         self.fp_info = {}  # information to display in the settings window
 
         # D-ATIS init
-        self.atis_info = []  # # information to display in the D-ATIS window
-        self.atis_request = False  # D-ATIS request ICAO
+        self.datis_request = False  # D-ATIS request ICAO
+        self.datis_content = []
 
         # status flags
         self.flight_started = False  # tracks simulation phase
@@ -616,13 +814,10 @@ class PythonInterface(object):
         self.load_settings()
 
         # widget and windows
-        self.details_widget = None
-        self.details_window = None
-        self.fp_info_caption = []
-        self.atis_widget = None
-        self.atis_window = None
-        self.atis_caption = []
-        self.message = ""  # text displayed in widget info_line
+        self.details = None
+        self.datis = None
+        self.details_message = ""  # text displayed in widget info_line
+        self.datis_message = ""  # information to display in the D-ATIS window
 
         # create main menu and widget
         self.main_menu = self.create_main_menu()
@@ -649,93 +844,47 @@ class PythonInterface(object):
     def at_gate(self) -> bool:
         return self.on_ground and not self.engines_started
 
-    def is_visible(self, element) -> bool:
-        if isinstance(element, list):
-            if len(element):
-                return xp.isWidgetVisible(element[0])
-            else:
-                return False
-        return xp.isWidgetVisible(element)
-
-    def change_group_mode(self, group: list, mode: str = 'show') -> None:
-        if mode == 'show' and not all(xp.isWidgetVisible(el) for el in group):
-            for el in group:
-                xp.showWidget(el)
-        elif mode == 'hide' and any(xp.isWidgetVisible(el) for el in group):
-            for el in group:
-                xp.hideWidget(el)
-
-    def hide_fp_info_widget(self) -> None:
-        self.change_group_mode(self.fp_info_caption, 'hide')
-        xp.hideWidget(self.fp_info_widget)
-
-    def show_fp_info_widget(self) -> None:
-        self.change_group_mode(self.fp_info_caption, 'show')
-        xp.showWidget(self.fp_info_widget)
-
-    def hide_atis_info_widget(self) -> None:
-        self.change_group_mode(self.atis_caption, 'hide')
-
-    def show_atis_info_widget(self) -> None:
-        self.change_group_mode(self.atis_caption, 'show')
-
-    def switch_details_window(self):
-        if xp.windowIsPoppedOut(self.details_window):
-            xp.setWindowPositioningMode(self.details_window, xp.WindowPositionFree)
-            xp.setWidgetProperty(self.details_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
-            xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowHasCloseBoxes, 1)
-        else:
-            xp.setWindowPositioningMode(self.details_window, xp.WindowPopOut)
-            xp.setWidgetProperty(self.details_popout_button, xp.Property_ButtonType, xp.LittleDownArrow)
-            xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowHasCloseBoxes, 0)
-
-    def switch_atis_window(self):
-        if xp.windowIsPoppedOut(self.atis_window):
-            xp.setWindowPositioningMode(self.atis_window, xp.WindowPositionFree)
-            xp.setWidgetProperty(self.atis_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
-            xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 1)
-        else:
-            xp.setWindowPositioningMode(self.atis_window, xp.WindowPopOut)
-            xp.setWidgetProperty(self.atis_popout_button, xp.Property_ButtonType, xp.LittleDownArrow)
-            xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 0)
-
-    def check_atis_request(self):
-        if self.async_atis:
+    def check_datis_request(self):
+        if self.async_datis:
             # we already started a SimBrief async instance
-            if not self.async_atis.pending():
+            if not self.async_datis.pending():
                 # job ended
-                self.async_atis.join()
-                if isinstance(self.async_atis.result, Exception):
+                self.async_datis.join()
+                if isinstance(self.async_datis.result, Exception):
                     # a non managed error occurred
-                    self.atis_info = ["An unknown error occurred"]
-                    xp.log(f" *** Unmanaged error in async task {self.async_atis.pid}: {self.async_atis.result}")
+                    self.datis_message = "An unknown error occurred"
+                    xp.log(f" *** Unmanaged error in async task {self.async_datis.pid}: {self.async_datis.result}")
                 else:
                     # result: {error, atis_info}
-                    error, result = self.async_atis.result.values()
+                    error, result = self.async_datis.result.values()
                     if error:
                         # a managed error occurred
-                        self.atis_info = ["Error retrieving D-ATIS"]
-                        xp.log(f" *** D-ATIS error in async task {self.async_atis.pid}: {error}")
+                        self.datis_message = "Error retrieving D-ATIS"
+                        xp.log(f" *** D-ATIS error in async task {self.async_datis.pid}: {error}")
                     elif result:
                         # we have a valid response
-                        self.format_atis_info(result)
-                        xp.log(f" --- D-ATIS Valid response: {result}")
+                        if "D-ATIS not available" in result:
+                            # no D-ATIS available for the station, no need to display D-ATIS panel
+                            self.datis_message = result
+                        else:
+                            self.datis_message = f"{datetime.now().strftime('%H:%M:%S')} - {self.datis_request} D-ATIS:"
+                            self.datis_content = self.format_atis_info(result)
                 # reset download
-                self.async_atis = False
-                self.atis_request = False
+                self.async_datis = False
+                self.datis_request = False
             else:
                 # no answer yet, waiting ...
                 pass
         else:
             # we need to start an async task
-            xp.log(f" ** {datetime.now().strftime('%H:%M:%S')} loop - starting new D-ATIS async ...")
-            self.clear_atis_widget()
-            self.atis_info = ["starting D-ATIS query ..."]
-            self.async_atis = Async(
+            self.datis_content = []
+            self.datis.clear_content_widget()
+            self.datis_message = "Starting D-ATIS query ..."
+            self.async_datis = Async(
                 Atis.run,
-                self.atis_request,
+                self.datis_request,
             )
-            self.async_atis.start()
+            self.async_datis.start()
 
     def create_main_menu(self):
         # create Menu
@@ -749,231 +898,148 @@ class PythonInterface(object):
     def main_menu_callback(self, menuRef, menuItem):
         """Main menu Callback"""
         if menuItem == 1:
-            if not self.details_widget:
-                self.create_details_widget(100, 400)
-            elif not xp.isWidgetVisible(self.details_widget):
-                xp.showWidget(self.details_widget)
+            if not self.details:
+                self.create_details_window(100, 400)
+            else:
+                self.details.set_window_visible()
         if menuItem == 2:
-            if not self.atis_window:
-                self.create_atis_widget(100, 800)
-            elif not xp.getWindowIsVisible(self.atis_window):
-                xp.setWindowIsVisible(self.atis_window, 1)
+            if not self.datis:
+                self.create_datis_window(100, 800)
+            else:
+                self.datis.set_window_visible()
 
-    def create_details_widget(self, x: int = 100, y: int = 400):
-
-        left, top, right, bottom = x + MARGIN, y - HEADER, x + WIDTH - MARGIN, y - HEIGHT + MARGIN
+    def create_details_window(self, x: int = 100, y: int = 400) -> None:
 
         # main window
-        self.details_widget = xp.createWidget(x, y, x+WIDTH, y-HEIGHT, 1, f"SimBrief2Zibo {__VERSION__}", 1,
-                                              0, xp.WidgetClass_MainWindow)
-        xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowHasCloseBoxes, 1)
-        xp.setWidgetProperty(self.details_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
+        self.details = FloatingWidget.create_window(f"SimBrief2Zibo {__VERSION__}", x, y, width=DETAILS_WIDTH)
 
-        # window popout button
-        self.details_popout_button = xp.createWidget(right-FONT_WIDTH, top, right, top-FONT_HEIGHT, 1, "", 0,
-                                                     self.details_widget, xp.WidgetClass_Button)
-        xp.setWidgetProperty(self.details_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
-
-        top -= 26
         # PilotID sub window
-        self.pilot_id_widget = xp.createWidget(left, top, right, top - LINE - 2*MARGIN, 1, "", 0,
-                                               self.details_widget, xp.WidgetClass_SubWindow)
+        self.details.add_user_info_widget()
 
-        l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - MARGIN - LINE
-        caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
-                                  self.details_widget, xp.WidgetClass_Caption)
-        self.pilot_id_input = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
-                                              self.details_widget, xp.WidgetClass_TextField)
-        xp.setWidgetProperty(self.pilot_id_input, xp.Property_MaxCharacters, 10)
-        self.pilot_id_caption = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
-                                                self.details_widget, xp.WidgetClass_Caption)
-        self.save_button = xp.createWidget(l + 148, t, r, b, 1, "SAVE", 0,
-                                           self.details_widget, xp.WidgetClass_Button)
-        self.edit_button = xp.createWidget(l + 148, t, r, b, 1, "CHANGE", 0,
-                                           self.details_widget, xp.WidgetClass_Button)
-
-        t = b - MARGIN*2
         # info message line
-        self.info_line = xp.createWidget(left, t, right, t - LINE, 1, "", 0,
-                                         self.details_widget, xp.WidgetClass_Caption)
-        xp.setWidgetProperty(self.info_line, xp.Property_CaptionLit, 1)
+        self.details.add_info_line()
 
-        t -= LINE + MARGIN
         # reload OFP button
-        self.reload_button = xp.createWidget(l + 150, t, r, t - LINE, 0, "RELOAD", 0,
-                                             self.details_widget, xp.WidgetClass_Button)
+        self.details.reload_button = self.details.add_button('RELOAD', align='right')
 
-        t -= LINE + MARGIN
+
+        self.details.top -= self.details.cr()
         # OFP info sub window
-        self.fp_info_widget = xp.createWidget(left, t, right, bottom, 1, "", 0, self.details_widget,
-                                              xp.WidgetClass_SubWindow)
-        xp.setWidgetProperty(self.fp_info_widget, xp.Property_SubWindowType, xp.SubWindowStyle_SubWindow)
-        t -= MARGIN
-        b = bottom + MARGIN
-        w = r - l
-        cap = xp.createWidget(l, t, r, t - LINE, 1, 'OFP INFO:', 0,
-                              self.details_widget, xp.WidgetClass_Caption)
-        self.fp_info_caption.append(cap)
-        t -= LINE + MARGIN
-        while t > b:
-            cap = xp.createWidget(l, t, r, t - LINE, 1, '--', 0,
-                                  self.details_widget, xp.WidgetClass_Caption)
-            self.fp_info_caption.append(cap)
-            t -= LINE
+        self.details.add_content_widget(title='OFP info:')
 
-        self.setup_widget()
-
-        # set underlying window
-        self.details_window = xp.getWidgetUnderlyingWindow(self.details_widget)
-        xp.setWindowTitle(self.details_window, "OFP Details")
+        self.details.setup_widget(self.pilot_id)
 
         # Register our widget handler
-        self.settingsWidgetHandlerCB = self.settingsWidgetHandler
-        xp.addWidgetCallback(self.details_widget, self.settingsWidgetHandlerCB)
-        xp.setKeyboardFocus(self.pilot_id_input)
+        self.settingsWidgetHandlerCB = self.detailsWidgetHandler
+        xp.addWidgetCallback(self.details.widget, self.settingsWidgetHandlerCB)
+        xp.setKeyboardFocus(self.details.pilot_id_input)
 
-    def create_atis_widget(self, x: int = 100, y: int = 800):
-        width = ATIS_WIDTH
-        left, top, right, bottom = x + MARGIN, y - HEADER, x + width - MARGIN, y - HEIGHT + MARGIN
+    def create_datis_window(self, x: int = 100, y: int = 800) -> None:
 
         # main window
-        self.atis_widget = xp.createWidget(x, y, x+width, y-HEIGHT, 1, "D-ATIS widget", 1, 0, xp.WidgetClass_MainWindow)
-        xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowHasCloseBoxes, 1)
-        xp.setWidgetProperty(self.atis_widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
+        self.datis = FloatingWidget.create_window("D-ATIS widget", x, y, width=ATIS_WIDTH)
 
-        # window popout button
-        self.atis_popout_button = xp.createWidget(right-FONT_WIDTH, top, right, top-FONT_HEIGHT, 1, "", 0,
-                                                  self.atis_widget, xp.WidgetClass_Button)
-        xp.setWidgetProperty(self.atis_popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
-
-        top -= 26
         # Buttons sub window
-        self.atis_subwindow = xp.createWidget(left, top, right, top - LINE - 2*MARGIN, 1, "", 0,
-                                              self.atis_widget, xp.WidgetClass_SubWindow)
-        l, t, r, b = left + MARGIN, top - MARGIN, right - MARGIN, top - LINE
-        self.dep_atis_button = xp.createWidget(l, t, l+100, b, 1, "DEP", 0,
-                                               self.atis_widget, xp.WidgetClass_Button)
-        self.arr_atis_button = xp.createWidget(r-100, t, r, b, 1, "ARR", 0,
-                                               self.atis_widget, xp.WidgetClass_Button)
+        self.datis.add_subwindow(lines=1)
+        l, t, r, b = self.datis.get_subwindow_margins(lines=1)
+        self.datis.top = t
+        self.datis.dep_button = self.datis.add_button("ORIG", subwindow=True)
+        self.datis.arr_button = self.datis.add_button("DEST", subwindow=True, align='right')
+        self.datis.top = b - self.datis.MARGIN
 
-        t = b - LINE - MARGIN
-        b = bottom + LINE
-        while t > b:
-            cap = xp.createWidget(left, t, right, t - LINE, 1, '--', 0,
-                                  self.atis_widget, xp.WidgetClass_Caption)
-            xp.setWidgetProperty(cap, xp.Property_CaptionLit, 1)
-            self.atis_caption.append(cap)
-            t -= LINE
+        # info message line
+        self.datis.add_info_line()
 
-        # set underlying window
-        self.atis_window = xp.getWidgetUnderlyingWindow(self.atis_widget)
-        xp.setWindowTitle(self.atis_window, "D-ATIS widget")
+        # add content widget
+        self.datis.add_content_widget()
 
         # Register our widget handler
-        self.atisWidgetHandlerCB = self.atisWidgetHandler
-        xp.addWidgetCallback(self.atis_widget, self.atisWidgetHandlerCB)
+        self.atisWidgetHandlerCB = self.datisWidgetHandler
+        xp.addWidgetCallback(self.datis.widget, self.atisWidgetHandlerCB)
 
-    def settingsWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
-        if xp.getWidgetDescriptor(self.info_line) != self.message:
-            xp.setWidgetDescriptor(self.info_line, self.message)
+    def detailsWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+        if not self.details:
+            return 1
+
+        self.details.check_info_line(self.details_message)
 
         if self.zibo_loaded and self.fp_checked and self.fp_info:
-            if not any(self.fp_info.get('zfw') in xp.getWidgetDescriptor(el) for el in self.fp_info_caption):
-                self.populate_info_widget()
-            if not self.is_visible(self.fp_info_widget):
-                self.show_fp_info_widget()
+            self.details.check_content_widget(lines=list(self.fp_info.items())[2:])
+            self.details.show_content_widget()
         else:
-            self.hide_fp_info_widget()
+            self.details.hide_content_widget()
 
         if self.fp_checked and not self.flight_started:
-            xp.showWidget(self.reload_button)
+            xp.showWidget(self.details.reload_button)
         else:
-            xp.hideWidget(self.reload_button)
+            xp.hideWidget(self.details.reload_button)
 
         if inMessage == xp.Message_CloseButtonPushed:
-            if self.details_widget:
-                xp.hideWidget(self.details_widget)
+            if self.details.window:
+                xp.setWindowIsVisible(self.details.window, 0)
                 return 1
 
         if inMessage == xp.Msg_PushButtonPressed:
-            if inParam1 == self.details_popout_button:
-                self.switch_details_window()
-            if inParam1 == self.save_button:
+            if inParam1 == self.details.popout_button:
+                self.details.switch_window_position()
+            if inParam1 == self.details.save_button:
                 self.save_settings()
                 return 1
-            if inParam1 == self.edit_button:
-                xp.setWidgetDescriptor(self.pilot_id_input, f"{self.pilot_id}")
+            if inParam1 == self.details.edit_button:
+                xp.setWidgetDescriptor(self.details.pilot_id_input, f"{self.pilot_id}")
                 self.pilot_id = None
-                self.setup_widget()
+                self.details.setup_widget()
                 return 1
-            if inParam1 == self.reload_button:
+            if inParam1 == self.details.reload_button:
                 self.fp_checked = False
-                self.message = 'OFP reload requested'
+                self.details_message = 'OFP reload requested'
                 return 1
         return 0
 
-    def setup_widget(self):
-        if self.pilot_id:
-            xp.hideWidget(self.pilot_id_input)
-            xp.hideWidget(self.save_button)
-            xp.setWidgetDescriptor(self.pilot_id_caption, f"{self.pilot_id}")
-            xp.showWidget(self.pilot_id_caption)
-            xp.showWidget(self.edit_button)
-        else:
-            xp.hideWidget(self.pilot_id_caption)
-            xp.hideWidget(self.edit_button)
-            xp.showWidget(self.pilot_id_input)
-            xp.showWidget(self.save_button)
+    def datisWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+        if not self.datis:
+            return 0
 
-    def atisWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+        self.datis.check_info_line(self.datis_message)
+
         if self.zibo_loaded and self.fp_info:
-            if self.fp_info['origin'] not in xp.getWidgetDescriptor(self.dep_atis_button):
-                xp.setWidgetDescriptor(self.dep_atis_button, self.fp_info['origin'])
-                xp.showWidget(self.dep_atis_button)
-            if self.fp_info['destination'] not in xp.getWidgetDescriptor(self.arr_atis_button):
-                xp.setWidgetDescriptor(self.arr_atis_button, self.fp_info['destination'])
-                xp.showWidget(self.arr_atis_button)
-            if self.atis_info:
-                if not any(self.atis_info[0] == xp.getWidgetDescriptor(el) for el in self.atis_caption):
-                    self.populate_atis_widget()
-                if not self.is_visible(self.atis_caption):
-                    self.show_atis_info_widget()
+            self.datis.check_widget_descriptor(self.datis.dep_button, self.fp_info['origin'])
+            self.datis.check_widget_descriptor(self.datis.arr_button, self.fp_info['destination'])
+            if self.datis_content:
+                self.datis.check_content_widget(self.datis_content)
+                self.datis.show_content_widget()
             else:
-                self.hide_atis_info_widget()
+                self.datis.hide_content_widget()
 
-            if self.atis_request:
-                # we have an ATIS request
-                self.check_atis_request()
+            if self.datis_request:
+                # we have an D-ATIS request
+                self.check_datis_request()
         else:
-            self.hide_atis_info_widget()
-            xp.hideWidget(self.dep_atis_button)
-            xp.hideWidget(self.arr_atis_button)
+            self.datis.hide_content_widget()
+            xp.hideWidget(self.datis.dep_button)
+            xp.hideWidget(self.datis.arr_button)
 
         # manage close window button
         if inMessage == xp.Message_CloseButtonPushed:
-            if self.atis_window:
-                xp.setWindowIsVisible(self.atis_window, 0)
+            if self.datis.window:
+                xp.setWindowIsVisible(self.datis.window, 0)
             return 1
 
         # manage widget buttons
         if inMessage == xp.Msg_PushButtonPressed:
-            if inParam1 == self.atis_popout_button:
-                self.switch_atis_window()
+            if inParam1 == self.datis.popout_button:
+                self.datis.switch_window_position()
             else:
-                icao = self.fp_info['origin' if inParam1 == self.dep_atis_button else 'destination']
+                icao = self.fp_info['origin' if inParam1 == self.datis.dep_button else 'destination']
                 xp.log(f"ATIS request: {icao}")
-                self.atis_request = icao
+                self.datis_request = icao
             return 1
 
         return 0
 
-    def populate_info_widget(self) -> None:
-        for i, (k, v) in enumerate(list(self.fp_info.items())[2:], 1):
-            xp.setWidgetDescriptor(self.fp_info_caption[i], f"{k.upper()}: {v}")
-
-    def format_atis_info(self, string: str) -> None:
+    def format_atis_info(self, string: str) -> list:
         # create lines from D-ATIS string
-        width = ATIS_WIDTH - 2 * MARGIN
+        width = self.datis.content_width
         words = string.split(' ')
         result = ['']
         for word in words:
@@ -981,17 +1047,7 @@ class PythonInterface(object):
                 result[-1] += word if not result[-1] else ' ' + word
             else:
                 result.append(word)
-        self.atis_info = result
-
-    def populate_atis_widget(self) -> None:
-        caption = len(self.atis_caption)
-        for i, el in enumerate(self.atis_info):
-            if i < caption:
-                xp.setWidgetDescriptor(self.atis_caption[i], el)
-
-    def clear_atis_widget(self) -> None:
-        for line in self.atis_caption:
-            xp.setWidgetDescriptor(line, '--')
+        return result
 
     def loopCallback(self, lastCall, elapsedTime, counter, refCon):
         """Loop Callback"""
@@ -1008,11 +1064,11 @@ class PythonInterface(object):
                             self.async_task.join()
                             if isinstance(self.async_task.result, Exception):
                                 # a non managed error occurred
-                                self.message = f"An unknown error occurred"
+                                self.details_message = "An unknown error occurred"
                                 xp.log(f" *** Unmanaged error in async task {self.async_task.pid}: {self.async_task.result}")
                             else:
                                 # result: {error, request_id, message, fp_info}
-                                error, request_id, self.message, fp_info = self.async_task.result.values()
+                                error, request_id, self.details_message, fp_info = self.async_task.result.values()
                                 if error:
                                     # a managed error occurred
                                     xp.log(f" *** SimBrief error in async task {self.async_task.pid}: {error}")
@@ -1031,7 +1087,7 @@ class PythonInterface(object):
                             pass
                     else:
                         # we need to start an async task
-                        self.message = "starting SimBrief query ..."
+                        self.details_message = "starting SimBrief query ..."
                         self.async_task = Async(
                             SimBrief.run,
                             self.pilot_id,
@@ -1043,21 +1099,21 @@ class PythonInterface(object):
                 elif not self.flight_started and not self.at_gate:
                     # flight mode, do nothing
                     self.flight_started = True
-                    self.message = "Have a nice flight!"
+                    self.details_message = "Have a nice flight!"
                     self.loop_schedule = DEFAULT_SCHEDULE * 10
             elif self.at_gate:
                 # look for a new OFP for a turnaround flight
                 self.flight_started = False
                 self.fp_checked = False
                 self.fp_info = {}
-                self.message = "Looking for a new OFP ..."
+                self.details_message = "Looking for a new OFP ..."
                 self.loop_schedule = DEFAULT_SCHEDULE
         else:
             # nothing to do
             if not self.zibo_loaded:
-                self.message = "Zibo not detected"
+                self.details_message = "Zibo not detected"
             elif not self.pilot_id:
-                self.message = "SimBrief PilotID required"
+                self.details_message = "SimBrief PilotID required"
             self.loop_schedule = DEFAULT_SCHEDULE * 5
 
         return self.loop_schedule
@@ -1065,7 +1121,7 @@ class PythonInterface(object):
     def load_settings(self) -> bool:
         if self.config_file.is_file():
             # read file
-            with open(self.config_file, 'r') as f:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
                 data = f.read()
             # parse file
             settings = json.loads(data)
@@ -1075,20 +1131,20 @@ class PythonInterface(object):
             # open settings window
             return False
 
-    def save_settings(self):
-        user_id = xp.getWidgetDescriptor(self.pilot_id_input).strip()
+    def save_settings(self) -> None:
+        user_id = xp.getWidgetDescriptor(self.details.pilot_id_input).strip()
         if not user_id.isdigit():
             # user gave something else in input
-            self.message = "pilotID has to be a number"
-            xp.setWidgetDescriptor(self.pilot_id_input, "")
+            self.details_message = "pilotID has to be a number"
+            xp.setWidgetDescriptor(self.details.pilot_id_input, "")
         else:
             settings = {'settings': {'pilot_id': int(user_id)}}
-            with open(self.config_file, 'w') as f:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(settings, f)
             # check file
             self.load_settings()
-            self.message = 'settings saved'
-            self.setup_widget()
+            self.details_message = 'settings saved'
+            self.details.setup_widget(self.pilot_id)
 
     def XPluginStart(self):
         return self.plugin_name, self.plugin_sig, self.plugin_desc
@@ -1108,9 +1164,10 @@ class PythonInterface(object):
     def XPluginStop(self):
         # Called once by X-Plane on quit (or when plugins are exiting as part of reload)
         xp.destroyFlightLoop(self.loop_id)
-        xp.destroyWidget(self.details_widget)
-        xp.destroyWindow(self.details_window)
-        xp.destroyWidget(self.atis_widget)
-        xp.destroyWindow(self.atis_window)
+        if self.details:
+            self.details.destroy()
+        if self.datis:
+            self.datis.destroy()
+
         xp.destroyMenu(self.main_menu)
         xp.log("flightloop, widget, menu destroyed, exiting ...")
