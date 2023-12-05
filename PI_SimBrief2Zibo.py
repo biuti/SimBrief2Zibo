@@ -770,6 +770,7 @@ class FloatingWidget(object):
             xp.hideWidget(self.edit_button)
             xp.showWidget(self.pilot_id_input)
             xp.showWidget(self.save_button)
+            xp.setKeyboardFocus(self.pilot_id_input)
 
     def destroy(self) -> None:
         xp.destroyWidget(self.widget)
@@ -932,7 +933,6 @@ class PythonInterface(object):
         # Register our widget handler
         self.settingsWidgetHandlerCB = self.detailsWidgetHandler
         xp.addWidgetCallback(self.details.widget, self.settingsWidgetHandlerCB)
-        xp.setKeyboardFocus(self.details.pilot_id_input)
 
     def create_datis_window(self, x: int = 100, y: int = 800) -> None:
 
