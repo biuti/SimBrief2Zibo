@@ -39,6 +39,9 @@ plugin_name = 'SimBrief2Zibo'
 plugin_sig = 'xppython3.simbrief2zibo'
 plugin_desc = 'Fetches latest OFP Data from SimBrief and creates the file ZIBO B738 requires'
 
+# Dref and Command parameters
+plugin_command_origin = 'simbrief2zibo'
+
 # Other parameters
 DEFAULT_SCHEDULE = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
 DAYS = 2  # how recent a fp file has to be to be considered
@@ -575,6 +578,36 @@ def weight_transform(weight: str, unit: str) -> int:
     return f"{round(str2int(weight) * m)} {t}"
 
 
+class EasyCommand:
+    """
+    Creates a command with an assigned callback with arguments
+    """
+
+    def __init__(self, plugin, command, function, args=False, description=''):
+        command = f"{plugin_command_origin}/{command}"
+        self.command = xp.createCommand(command, description)
+        self.commandCH = self.commandCHandler
+        xp.registerCommandHandler(self.command, self.commandCH, 1, 0)
+
+        self.function = function
+        self.args = args
+        self.plugin = plugin
+
+    def commandCHandler(self, inCommand, inPhase, inRefcon):
+        if inPhase == 0:
+            if self.args:
+                if type(self.args).__name__ == 'tuple':
+                    self.function(*self.args)
+                else:
+                    self.function(self.args)
+            else:
+                self.function()
+        return 0
+
+    def destroy(self):
+        xp.unregisterCommandHandler(self.command, self.commandCH, 1, 0)
+
+
 class FloatingWidget(object):
 
     LINE = FONT_HEIGHT + 4
@@ -829,6 +862,23 @@ class PythonInterface(object):
         # create main menu and widget
         self.main_menu = self.create_main_menu()
 
+        # register commands
+        self.detailsWindowCMD = EasyCommand(
+            self, 'details_window_toggle', 
+            self.detailsWindowToggle,
+            description="Toggle SimBrief2Zibo OFP details window."
+        )
+        self.datisWindowCMD = EasyCommand(
+            self, 'datis_window_toggle', 
+            self.datisWindowToggle,
+            description="Toggle SimBrief2Zibo D-ATIS window."
+        )
+        self.OFPReloadCMD = EasyCommand(
+            self, 'reload_simbrief_ofp', 
+            self.OFPReload,
+            description="Send a OFP request to SimBrief"
+        )
+
     @property
     def zibo_loaded(self) -> bool:
         _, acf_path = xp.getNthAircraftModel(0)
@@ -1043,6 +1093,23 @@ class PythonInterface(object):
 
         return 0
 
+    def detailsWindowToggle(self):
+        if not self.details:
+            self.create_details_window(100, 400)
+        else:
+            self.details.toggle_window()
+
+    def datisWindowToggle(self):
+        if not self.datis:
+            self.create_datis_window(100, 800)
+        else:
+            self.datis.toggle_window()
+
+    def OFPReload(self):
+        if self.zibo_loaded and self.fp_checked:
+            self.details_message = 'OFP reload requested'
+            self.fp_checked = False
+
     def format_atis_info(self, string: str) -> list:
         # create lines from D-ATIS string
         width = self.datis.content_width
@@ -1168,12 +1235,19 @@ class PythonInterface(object):
         pass
 
     def XPluginStop(self):
-        # Called once by X-Plane on quit (or when plugins are exiting as part of reload)
+        """Called once by X-Plane on quit (or when plugins are exiting as part of reload)"""
+
+        # kill loop
         xp.destroyFlightLoop(self.loop_id)
+        # destroy widgets
         if self.details:
             self.details.destroy()
         if self.datis:
             self.datis.destroy()
-
+        # kill commands
+        self.OFPReloadCMD.destroy()
+        self.detailsWindowCMD.destroy()
+        self.datisWindowCMD.destroy()
+        # destroy menu
         xp.destroyMenu(self.main_menu)
-        xp.log("flightloop, widget, menu destroyed, exiting ...")
+        xp.log("flightloop, widget, commands, menu destroyed, exiting ...")
