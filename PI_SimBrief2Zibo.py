@@ -758,6 +758,12 @@ class FloatingWidget(object):
             xp.setWidgetProperty(self.widget, xp.Property_MainWindowHasCloseBoxes, 1)
             xp.setWindowIsVisible(self.window, 1)
 
+    def toggle_window(self) -> None:
+        if not xp.getWindowIsVisible(self.window):
+            self.set_window_visible()
+        else:
+            xp.setWindowIsVisible(self.window, 0)
+
     def setup_widget(self, pilot_id: str | None = None):
         if pilot_id:
             xp.hideWidget(self.pilot_id_input)
