@@ -32,7 +32,7 @@ except ImportError:
 
 
 # Version
-__VERSION__ = 'v1.4.rc.3'
+__VERSION__ = 'v1.5.rc.1'
 
 # Plugin parameters required from XPPython3
 plugin_name = 'SimBrief2Zibo'
