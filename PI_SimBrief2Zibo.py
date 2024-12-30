@@ -223,10 +223,6 @@ class SimBrief(object):
         if fp_filename:
             self.request_id = request_id
             self.coroute_filename = fp_filename
-
-            # delete old XML file from the FMS plans folder
-            # self.delete_old_xml_files()
-
             parsed = self.parse_ofp(ofp)
             if self.create_xml_file(ofp, parsed):
                 self.message = "All set!"
@@ -306,7 +302,6 @@ class SimBrief(object):
             result = self.download(self.fp_link, file)
             if not result:
                 return False
-            #! test: insert dep and arr procedures in downloaded fms file
             dep, arr = extract_dep_arr(ofp)
             if dep or arr:
                 insert_dep_arr(file, dep, arr)
@@ -565,7 +560,7 @@ def str2int(string: str) -> int:
     return int(v) * sign
 
 
-def weight_transform(weight: str, unit: str) -> int:
+def weight_transform(weight: str, unit: str) -> str:
     if unit == 'kgs':
         t = 'lbs'
         m = 2.205
@@ -634,14 +629,18 @@ class FloatingWidget(object):
         }
 
         # main widget
-        self.widget = xp.createWidget(x, y, x + width, y - height, 
-                                      1, title, 1, 0, xp.WidgetClass_MainWindow)
+        self.widget = xp.createWidget(
+            x, y, x + width, y - height, 
+            1, title, 1, 0, xp.WidgetClass_MainWindow
+        )
         xp.setWidgetProperty(self.widget, xp.Property_MainWindowHasCloseBoxes, 1)
         xp.setWidgetProperty(self.widget, xp.Property_MainWindowType, xp.MainWindowStyle_Translucent)
 
         # window popout button
-        self.popout_button = xp.createWidget(self.right - FONT_WIDTH, self.top, self.right, self.top - FONT_HEIGHT,
-                                              1, "", 0, self.widget, xp.WidgetClass_Button)
+        self.popout_button = xp.createWidget(
+            self.right - FONT_WIDTH, self.top, self.right, self.top - FONT_HEIGHT,
+            1, "", 0, self.widget, xp.WidgetClass_Button
+        )
         xp.setWidgetProperty(self.popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
 
         # set underlying window
@@ -681,8 +680,10 @@ class FloatingWidget(object):
 
     def add_info_line(self) -> None:
         if not self.info_line:
-            self.info_line = xp.createWidget(self.left, self.top, self.right, self.top - self.LINE,
-                                             1, "", 0, self.widget, xp.WidgetClass_Caption)
+            self.info_line = xp.createWidget(
+                self.left, self.top, self.right, self.top - self.LINE,
+                1, "", 0, self.widget, xp.WidgetClass_Caption
+            )
             xp.setWidgetProperty(self.info_line, xp.Property_CaptionLit, 1)
             self.top -= self.cr()
 
@@ -696,30 +697,44 @@ class FloatingWidget(object):
             l, r = self.left + subwindow*self.MARGIN, self.left + width + subwindow*self.MARGIN
         else:
             l, r = self.right - width - subwindow*self.MARGIN, self.right - subwindow*self.MARGIN
-        return xp.createWidget(l, self.top, r, self.top - self.LINE,
-                               0, text, 0, self.widget, xp.WidgetClass_Button)
+        return xp.createWidget(
+            l, self.top, r, self.top - self.LINE,
+            0, text, 0, self.widget, xp.WidgetClass_Button
+        )
 
     def add_subwindow(self, lines: int | None = None):
         height = self.get_height(lines)
-        return xp.createWidget(self.left, self.top, self.right, self.top - height,
-                               1, "", 0, self.widget, xp.WidgetClass_SubWindow)
+        return xp.createWidget(
+            self.left, self.top, self.right, self.top - height,
+            1, "", 0, self.widget, xp.WidgetClass_SubWindow
+        )
 
     def add_user_info_widget(self) -> None:
         # user info subwindow
         self.pilot_info_subwindow = self.add_subwindow(lines=1)
         l, t, r, b = self.get_subwindow_margins(lines=1)
         # user info widgets
-        caption = xp.createWidget(l, t, l + 90, b, 1, 'Simbrief PilotID:', 0,
-                                  self.widget, xp.WidgetClass_Caption)
-        self.pilot_id_input = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
-                                              self.widget, xp.WidgetClass_TextField)
+        caption = xp.createWidget(
+            l, t, l + 90, b,
+            1, 'Simbrief PilotID:', 0, self.widget, xp.WidgetClass_Caption
+        )
+        self.pilot_id_input = xp.createWidget(
+            l + 88, t, l + 145, b,
+            1, "", 0, self.widget, xp.WidgetClass_TextField
+        )
         xp.setWidgetProperty(self.pilot_id_input, xp.Property_MaxCharacters, 10)
-        self.pilot_id_caption = xp.createWidget(l + 88, t, l + 145, b, 1, "", 0,
-                                                self.widget, xp.WidgetClass_Caption)
-        self.save_button = xp.createWidget(l + 148, t, r, b, 1, "SAVE", 0,
-                                           self.widget, xp.WidgetClass_Button)
-        self.edit_button = xp.createWidget(l + 148, t, r, b, 1, "CHANGE", 0,
-                                           self.widget, xp.WidgetClass_Button)
+        self.pilot_id_caption = xp.createWidget(
+            l + 88, t, l + 145, b,
+            1, "", 0, self.widget, xp.WidgetClass_Caption
+        )
+        self.save_button = xp.createWidget(
+            l + 148, t, r, b,
+            1, "SAVE", 0, self.widget, xp.WidgetClass_Button
+        )
+        self.edit_button = xp.createWidget(
+            l + 148, t, r, b,
+            1, "CHANGE", 0, self.widget, xp.WidgetClass_Button
+        )
         self.top = b - self.MARGIN*2
 
     def add_content_widget(self, title: str = "", lines: int | None = None):
@@ -727,8 +742,10 @@ class FloatingWidget(object):
         l, t, r, b = self.get_subwindow_margins()
         if len(title):
             # add title line
-            self.content_widget['title'] = xp.createWidget(l, t, r, t - self.LINE, 1, title, 0,
-                                                           self.widget, xp.WidgetClass_Caption)
+            self.content_widget['title'] = xp.createWidget(
+                l, t, r, t - self.LINE,
+                1, title, 0, self.widget, xp.WidgetClass_Caption
+            )
             t -= self.cr()
         # add content lines
         while t > b:
