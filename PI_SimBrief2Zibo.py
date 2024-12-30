@@ -14,12 +14,10 @@ from __future__ import annotations
 import os
 import json
 import threading
+import requests
 
 from pathlib import Path
-from urllib import request, parse
-from urllib.error import URLError, HTTPError
-from http.client import HTTPResponse
-from ssl import SSLCertVerificationError
+from urllib import parse
 from xml.etree import ElementTree as ET
 from datetime import datetime, timedelta
 from time import perf_counter
@@ -55,6 +53,42 @@ except NameError:
 
 DETAILS_WIDTH = 240
 ATIS_WIDTH = DETAILS_WIDTH * 2
+
+
+def get_unsecure_url(url: str) -> str:
+    parsed = parse.urlparse(url)
+    parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
+    return parse.urlunparse(parsed)
+
+
+def get_from_url(url: str) -> tuple[bool | requests.Response, str | int | None]:
+    response = False
+    error = None
+    try:
+        response = requests.get(url, verify=True)
+    except requests.exceptions.SSLError as e:
+        # change link to unsecure protocol to avoid SSL error in some weird systems
+        print(f" *** connection to {url} had to run in unsecure mode: {e.args[0]}")
+        try:
+            link = get_unsecure_url(url)
+            response = requests.get(link)
+        except Exception as e:
+            print(f"*** SimBrief generic error: {e.args[0]}")
+            error = e.args[0]
+    except requests.exceptions.ConnectionError as e:
+        print(f"*** SimBrief connection error: {e.args[0]}")
+        error = e.args[0]
+    finally:
+        if response:
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                error = response.status_code
+                if response.status_code == 400:
+                    print(f"*** SimBrief Error, probably wrong pilotID")
+                else:
+                    print(f"*** SimBrief connection refused: {response.status_code} - {response.reason}")
+    return response, error
 
 
 class Async(threading.Thread):
@@ -141,60 +175,37 @@ class SimBrief(object):
         }
         return result
 
-    def query(self, url: str) -> HTTPResponse | None:
-        response = None
-        try:
-            response = request.urlopen(url)
-        except HTTPError as e:
-            if e.code == 400:
-                # HTTP Error 400: Bad Request
+    def query(self, url: str) -> str | None:
+        response, error = get_from_url(url)
+        if error:
+            if error == 400:
                 self.message = "Error: is your pilotID correct?"
             else:
                 self.message = "Error trying to connect to SimBrief"
-            self.error = e
-            return
-        except (SSLCertVerificationError, URLError) as e:
-            # change link to unsecure protocol to avoid SSL error in some weird systems
-            print(f" *** get_ofp() had to run in unsecure mode: {e}")
-            try:
-                parsed = parse.urlparse(url)
-                parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
-                link = parse.urlunparse(parsed)
-                response = request.urlopen(link)
-            except (HTTPError, URLError) as e:
-                self.message = f"Error trying to connect to SimBrief"
-                self.error = e
-                return
-        except Exception as e:
-            self.message = f"Error trying to connect to SimBrief"
-            self.error = e
-            return
-        return response
+            self.error = error
+        elif isinstance(response, requests.Response):
+            return response.text
 
     def download(self, source: str, destination: Path) -> Path | bool:
-        try:
-            result = request.urlretrieve(source, destination)
-        except (SSLCertVerificationError, HTTPError, URLError):
-            # change link to unsecure protocol to avoid SSL error in some weird systems
-            parsed = parse.urlparse(source)
-            parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
-            link = parse.urlunparse(parsed)
-            try:
-                result = request.urlretrieve(link, destination)
-            except (HTTPError, URLError) as e:
-                self.message = f"Error downloading fms file from SimBrief"
-                self.error = e
-                return False
-        except Exception as e:
-            self.message = f"Error downloading fms file from SimBrief"
-            self.error = e
+        response, error = get_from_url(source)
+        if error:
+            self.message = "Error downloading fms file from SimBrief"
+            self.error = error
             return False
+        elif isinstance(response, requests.Response):
+            try:
+                with open(destination, 'wb') as f:
+                    f.write(response.content)
+            except Exception as e:
+                print(f"*** SimBrief download error: {e.args[0]}")
+                self.message = "Error writing FP file"
+                self.error = e.args[0]
+                return False
         return destination
 
-    def process(self, response: HTTPResponse):
+    def process(self, text: str):
         """ only XML now"""
-        xml_source = ET.parse(response)
-        data = xml_source.getroot()
+        data = ET.fromstring(text)
 
         request_id = data.find('params').find('request_id').text
         if self.request_id == request_id:
@@ -360,39 +371,19 @@ class Atis(object):
         }
         return result
 
-    def query(self) -> HTTPResponse | None:
-        response = None
-        try:
-            query = request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0'})
-            response = request.urlopen(query)
-        except HTTPError as e:
-            if e.code == 500:
-                # HTTP Error 500: Internal Server Error
-                self.atis_info = "Error: ICAO does not exist"
+    def query(self) -> str | None:
+        response, error = get_from_url(self.url)
+        if error:
+            if error == 500:
+                self.message = "Error: ICAO does not exist"
             else:
-                self.atis_info = "Error trying to connect to DATIS server"
-            self.error = e
-            return
-        except (SSLCertVerificationError, URLError) as e:
-            # change link to unsecure protocol to avoid SSL error in some weird systems
-            try:
-                parsed = parse.urlparse(self.url)
-                parsed = parsed._replace(scheme=parsed.scheme.replace('https', 'http'))
-                link = parse.urlunparse(parsed)
-                query = request.Request(link, headers={'User-Agent': 'Mozilla/5.0'})
-                response = request.urlopen(query)
-            except (HTTPError, URLError) as e:
-                self.atis_info = "Error trying to connect to DATIS server"
-                self.error = e
-                return
-        except Exception as e:
-            self.atis_info = "Error trying to connect to DATIS server"
-            self.error = e
-            return
-        return response
+                self.message = "Error trying to connect to DATIS server"
+            self.error = error
+        elif isinstance(response, requests.Response):
+            return response.text
 
-    def process(self, response: HTTPResponse) -> None:
-        data = response.read().decode()
+    def process(self, data: str) -> None:
+
         if '<div class="atis-text">' not in data:
             # DATIS not available
             self.atis_info = f"D-ATIS not available for {self.icao}"
