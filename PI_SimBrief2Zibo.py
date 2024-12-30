@@ -2,7 +2,7 @@
 SimBrief2Zibo
 X-Plane plugin
 
-Copyright (c) 2023, Antonio Golfari
+Copyright (c) 2024, Antonio Golfari
 All rights reserved.
 
 This source code is licensed under the BSD-style license found in the
@@ -26,11 +26,10 @@ try:
     from XPPython3 import xp
 except ImportError:
     print('xp module not found')
-    pass
 
 
 # Version
-__VERSION__ = 'v1.5.rc.1'
+__VERSION__ = 'v1.6-beta.2'
 
 # Plugin parameters required from XPPython3
 plugin_name = 'SimBrief2Zibo'
