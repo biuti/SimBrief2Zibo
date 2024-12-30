@@ -40,6 +40,12 @@ plugin_desc = 'Fetches latest OFP Data from SimBrief and creates the file ZIBO B
 # Dref and Command parameters
 plugin_command_origin = 'simbrief2zibo'
 
+# Aircrafts
+AIRCRAFTS = [
+    ('Zibo', 'B737-800X'),
+    ('LevelUp', 'LevelUp')
+]
+
 # Other parameters
 DEFAULT_SCHEDULE = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
 DAYS = 2  # how recent a fp file has to be to be considered
@@ -832,6 +838,8 @@ class PythonInterface(object):
         self.async_datis = False
         self.request_id = None  # OFP generated ID
         self.fp_info = {}  # information to display in the settings window
+        self.aircraft = False
+        self.acf_path = None
 
         # D-ATIS init
         self.datis_request = False  # D-ATIS request ICAO
@@ -871,9 +879,9 @@ class PythonInterface(object):
         )
 
     @property
-    def zibo_loaded(self) -> bool:
-        _, acf_path = xp.getNthAircraftModel(0)
-        return 'B737-800X' in acf_path
+    def aircraft_detected(self) -> bool:
+        self.check_aircraft()
+        return bool(self.aircraft)
 
     @property
     def engines_started(self) -> bool:
@@ -891,6 +899,16 @@ class PythonInterface(object):
     @property
     def at_gate(self) -> bool:
         return self.on_ground and not self.engines_started
+
+    def check_aircraft(self) -> None:
+        _, acf_path = xp.getNthAircraftModel(0)
+        if acf_path != self.acf_path:
+            self.acf_path = acf_path
+            acf = next((p[0] for p in AIRCRAFTS if p[1] in self.acf_path), None)
+            if acf:
+                self.aircraft = acf
+            else:
+                self.aircraft = False
 
     def check_datis_request(self):
         if self.async_datis:
@@ -1010,7 +1028,7 @@ class PythonInterface(object):
 
         self.details.check_info_line(self.details_message)
 
-        if self.zibo_loaded and self.fp_checked and self.fp_info:
+        if self.aircraft_detected and self.fp_checked and self.fp_info:
             self.details.check_content_widget(lines=list(self.fp_info.items())[2:])
             self.details.show_content_widget()
         else:
@@ -1049,7 +1067,7 @@ class PythonInterface(object):
 
         self.datis.check_info_line(self.datis_message)
 
-        if self.zibo_loaded and self.fp_info:
+        if self.aircraft_detected and self.fp_info:
             self.datis.check_widget_descriptor(self.datis.dep_button, self.fp_info['origin'])
             self.datis.check_widget_descriptor(self.datis.arr_button, self.fp_info['destination'])
             if self.datis_content:
@@ -1097,7 +1115,7 @@ class PythonInterface(object):
             self.datis.toggle_window()
 
     def OFPReload(self):
-        if self.zibo_loaded and self.fp_checked:
+        if self.aircraft_detected and self.fp_checked:
             self.details_message = 'OFP reload requested'
             self.fp_checked = False
 
@@ -1117,7 +1135,7 @@ class PythonInterface(object):
         """Loop Callback"""
         t = datetime.now().strftime('%H:%M:%S')
         start = perf_counter()
-        if self.zibo_loaded and self.pilot_id:
+        if self.aircraft_detected and self.pilot_id:
             if not self.flight_started:
                 if not self.fp_checked and self.at_gate:
                     # check fp
@@ -1174,8 +1192,8 @@ class PythonInterface(object):
                 self.loop_schedule = DEFAULT_SCHEDULE
         else:
             # nothing to do
-            if not self.zibo_loaded:
-                self.details_message = "Zibo not detected"
+            if not self.aircraft_detected:
+                self.details_message = "Aircraft not detected"
             elif not self.pilot_id:
                 self.details_message = "SimBrief PilotID required"
             self.loop_schedule = DEFAULT_SCHEDULE * 5
