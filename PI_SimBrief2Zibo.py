@@ -2,7 +2,7 @@
 SimBrief2Zibo
 X-Plane plugin
 
-Copyright (c) 2024, Antonio Golfari
+Copyright (c) 2025, Antonio Golfari
 All rights reserved.
 
 This source code is licensed under the BSD-style license found in the
@@ -77,7 +77,7 @@ def get_from_url(url: str) -> tuple[bool | requests.Response, str | int | None]:
         print(f" *** connection to {url} had to run in unsecure mode: {e.args[0]}")
         try:
             link = get_unsecure_url(url)
-            response = requests.get(link)
+            response = requests.get(link, verify=False, timeout=5)
         except Exception as e:
             print(f"*** SimBrief generic error: {e.args[0]}")
             error = e.args[0]
@@ -85,15 +85,9 @@ def get_from_url(url: str) -> tuple[bool | requests.Response, str | int | None]:
         print(f"*** SimBrief connection error: {e.args[0]}")
         error = e.args[0]
     finally:
-        if response:
-            try:
-                response.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                error = response.status_code
-                if response.status_code == 400:
-                    print(f"*** SimBrief Error, probably wrong pilotID")
-                else:
-                    print(f"*** SimBrief connection refused: {response.status_code} - {response.reason}")
+        if isinstance(response, requests.Response) and response.status_code != 200:
+            error = response.status_code
+            print(f"*** SimBrief connection refused: {response.status_code} - {response.reason}")
     return response, error
 
 
@@ -171,7 +165,7 @@ class SimBrief(object):
         s = SimBrief(pilot_id, path, request_id)
         url = s.xml_url if s.source == 'xml' else s.json_url
         response = s.query(url)
-        if not s.error:
+        if response and not s.error:
             s.process(response)
         result = {
             'error': s.error,
@@ -185,6 +179,7 @@ class SimBrief(object):
         response, error = get_from_url(url)
         if error:
             if error == 400:
+                # probably wrong pilotID
                 self.message = "Error: is your pilotID correct?"
             else:
                 self.message = "Error trying to connect to SimBrief"
@@ -203,7 +198,7 @@ class SimBrief(object):
                 with open(destination, 'wb') as f:
                     f.write(response.content)
             except Exception as e:
-                print(f"*** SimBrief download error: {e.args[0]}")
+                print(f"*** simbrief2zibo error saving FP file: {e.args[0]}")
                 self.message = "Error writing FP file"
                 self.error = e.args[0]
                 return False
@@ -364,7 +359,7 @@ class Atis(object):
 
         a = Atis(icao)
         response = a.query()
-        if not a.error:
+        if response and not a.error:
             a.process(response)
         result = {
             'error': a.error,
@@ -459,7 +454,7 @@ def extract_dep_arr(ofp: ET.Element) -> tuple[list, list]:
             arr.append(f"DESRWY RW{arr_rwy}")
         des = None
         if rte[-1].startswith(arr_icao):
-            des = rte.pop[-1]
+            des = rte.pop(-1)
         if len(rte) > 3 and rte[0] != rte[-1]:
             if '.' in rte[-1]:
                 # we should have STAR.TRANS
@@ -925,6 +920,8 @@ class PythonInterface(object):
             acf = next((p[0] for p in AIRCRAFTS if p[1] in self.acf_path), None)
             if acf:
                 self.aircraft = acf
+                if 'not detected' in self.details_message:
+                    self.details_message = f"{acf} detected"
             else:
                 self.aircraft = False
 
