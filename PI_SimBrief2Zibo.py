@@ -48,6 +48,7 @@ AIRCRAFTS = [
 # Other parameters
 DEFAULT_SCHEDULE = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
 DAYS = 2  # how recent a fp file has to be to be considered
+DATIS = True # to avoid displaying DATIS widget waiting for a new website for Digital Atis info
 
 # widget parameters
 try:
@@ -352,7 +353,7 @@ class Atis(object):
 
     @property
     def url(self) -> str:
-        return f"https://atis.report/a/{self.icao}"
+        return f"https://atis.rudicloud.com/a/{self.icao}"
 
     @staticmethod
     def run(icao: str) -> dict:
@@ -883,11 +884,12 @@ class PythonInterface(object):
             self.detailsWindowToggle,
             description="Toggle SimBrief2Zibo OFP details window."
         )
-        self.datisWindowCMD = EasyCommand(
-            self, 'datis_window_toggle', 
-            self.datisWindowToggle,
-            description="Toggle SimBrief2Zibo D-ATIS window."
-        )
+        if DATIS:
+            self.datisWindowCMD = EasyCommand(
+                self, 'datis_window_toggle', 
+                self.datisWindowToggle,
+                description="Toggle SimBrief2Zibo D-ATIS window."
+            )
         self.OFPReloadCMD = EasyCommand(
             self, 'reload_simbrief_ofp', 
             self.OFPReload,
@@ -973,8 +975,9 @@ class PythonInterface(object):
         menu = xp.createMenu('SimBrief2Zibo', handler=self.main_menu_callback)
         # add Menu Items
         xp.appendMenuItem(menu, 'OFP Details', 1)
-        # add D-ATIS widget
-        xp.appendMenuItem(menu, 'D-ATIS', 2)
+        if DATIS:
+            # add D-ATIS widget
+            xp.appendMenuItem(menu, 'D-ATIS', 2)
         return menu
 
     def main_menu_callback(self, menuRef, menuItem):
