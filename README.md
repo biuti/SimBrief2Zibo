@@ -1,5 +1,5 @@
 # SimBrief2Zibo for X-Plane 12
-Fetch latest user OFP Data from SimBrief and creates the file ZIBO B737-800 modified requires for the UPLINK and CO ROUTE features.
+Fetch latest user OFP Data from SimBrief and creates the file ZIBO B737-800 modified and LevelUp B737NG Series require for the UPLINK and CO ROUTE features.
 
 ## Features
 - Creates the _b738x.xml_ file needed for Zibo ver.5.6+ UPLINK feature from latest SimBrief OFP
@@ -48,20 +48,18 @@ AAL and QFA apparently have no descent wind info in their OFP.
 ### D-ATIS Widget
 This plugin has a Digital ATIS widget.
 It displays latest D-ATIS for departure and destination in airports equipped with it.
-Unfortunately the website informations were grabbed from [atis.report](https://atis.report) is not available anymore. I'm waiting for an alternative.
 
 ## Requirements
 - MacOS 10.14, Windows 7 and Linux kernel 4.0 and above
 - X-Plane 12.1.3 and above (not tested with previous versions, may work)
 - pbuckner's [XPPython3 plugin](https://xppython3.readthedocs.io/en/latest/index.html)
-- [Zibo B737-800 Modified](https://forums.x-plane.org/index.php?/forums/forum/384-zibo-b738-800-modified/) for X-Plane 12 **ver. 4.3** and above (**may be compatible with some previous versions**) or [LevelUp B737NG Series](https://forum.thresholdx.net/files/file/3865-levelup-737ng-series/) for X-Plane 12 **ver. U1**
+- [Zibo B737-800 Modified](https://forums.x-plane.org/index.php?/forums/forum/384-zibo-b738-800-modified/) for X-Plane 12 **ver. 4.04** and above (**may be compatible with some previous versions**) or [LevelUp B737NG Series](https://forum.thresholdx.net/files/file/3865-levelup-737ng-series/) for X-Plane 12 **ver. U1**
 
 > [!IMPORTANT]
 > **I strongly suggest to install latest available version of the XPPython3 plugin.
-Starting from ver. 4.3.0 it is not needed to install Python3 on your system, and all needed libraries are already installed, so it's a lot easier to manage.
+Starting from ver. 4.3.0 it is not needed to install Python3 on your system, and all needed libraries are already installed, so it's a lot easier to manage.\
 \
-\
-Otherwise, in the very unfortunate case you stick with previous versions of the plugin, you'll need to download correct XPPython3 version according to your Python3 installed version, and you'll need to install **Requests** library for this plugin to work.
+Otherwise, in the very unfortunate case you stick with previous versions of the plugin, you'll need to download correct XPPython3 version according to your Python3 installed version, and you'll need to install **Requests** library for this plugin to work.\
 Read [instructions](https://xppython3.readthedocs.io/en/latest/usage/installation_plugin.html) on the website**
 
 ## Installation
