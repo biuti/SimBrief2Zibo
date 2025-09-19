@@ -18,6 +18,7 @@ import requests
 
 from pathlib import Path
 from urllib import parse
+from typing import Optional
 from xml.etree import ElementTree as ET
 from datetime import datetime, timedelta
 from time import perf_counter
@@ -29,7 +30,7 @@ except ImportError:
 
 
 # Version
-__VERSION__ = 'v1.7-beta.1'
+__VERSION__ = 'v1.8-beta.1'
 
 # Plugin parameters required from XPPython3
 plugin_name = 'SimBrief2Zibo'
@@ -48,7 +49,7 @@ AIRCRAFTS = [
 # Other parameters
 DEFAULT_SCHEDULE = 15  # positive numbers are seconds, 0 disabled, negative numbers are cycles
 DAYS = 2  # how recent a fp file has to be to be considered
-DATIS = True # to avoid displaying DATIS widget waiting for a new website for Digital Atis info
+DATIS = 'atis.guru' # False to avoid displaying DATIS widget waiting for a new website for Digital Atis info
 
 # widget parameters
 try:
@@ -100,7 +101,7 @@ class Async(threading.Thread):
         result (): return of the task method
     """
 
-    def __init__(self, task, *args, **kwargs):
+    def __init__(self, task, *args, **kwargs) -> None:
 
         self.pid = os.getpid()
         self.task = task
@@ -113,7 +114,7 @@ class Async(threading.Thread):
 
         self.pending = self.is_alive
 
-    def run(self):
+    def run(self) -> None:
         start = perf_counter()
         try:
             self.result = self.task(*self.args, **self.kwargs)
@@ -122,18 +123,18 @@ class Async(threading.Thread):
         finally:
             self.elapsed = perf_counter() - start
 
-    def stop(self):
+    def stop(self) -> None:
         if self.is_alive():
             self.cancel.set()
             self.join(3)
 
 
-class SimBrief(object):
+class SimBrief:
 
     source = 'xml'
     uplink_filename = 'b738x'
 
-    def __init__(self, pilot_id: str, path: Path, request_id: str | None) -> None:
+    def __init__(self, pilot_id: str, path: Path, request_id: Optional[str] = None) -> None:
         self.pilot_id = pilot_id
         self.path = path
         self.request_id = request_id
@@ -197,18 +198,23 @@ class SimBrief(object):
             try:
                 with open(destination, 'wb') as f:
                     f.write(response.content)
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, OSError) as e:
                 print(f"*** simbrief2zibo error saving FP file: {e.args[0]}")
                 self.message = "Error writing FP file"
                 self.error = e.args[0]
                 return False
         return destination
 
-    def process(self, text: str):
+    def process(self, text: str) -> None:
         """ only XML now"""
-        data = ET.fromstring(text)
+        try:
+            data = ET.fromstring(text)
+            request_id = data.find('params').find('request_id').text
+        except ET.ParseError as e:
+            self.message = "Error parsing XML"
+            self.error = e
+            return
 
-        request_id = data.find('params').find('request_id').text
         if self.request_id == request_id:
             # no new OFP
             self.message = "No new OFP available"
@@ -266,11 +272,12 @@ class SimBrief(object):
 
     def find_or_retrieve_fp(self, ofp: ET.Element) -> str | bool:
 
-        orig = ofp.find('origin')
-        dest = ofp.find('destination')
-        self.origin = orig.find('icao_code').text
-        self.destination = dest.find('icao_code').text
-        if not (self.origin and self.destination):
+        try:
+            self.origin = ofp.find('origin').find('icao_code').text
+            self.destination = ofp.find('destination').find('icao_code').text
+        except AttributeError as e:
+            self.message = "Error parsing OFP data"
+            self.error = e.args[0]
             return False
 
         # ver. 5.6+ fms file not needed for UPLINK feature anymore
@@ -327,37 +334,45 @@ class SimBrief(object):
         try:
             tree.write(file, encoding='utf-8', xml_declaration=True)
             return True
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, OSError) as e:
             self.message = f"Error writing {filename}"
-            self.error = e
+            self.error = e.args[0]
             return False
 
-    def delete_old_xml_files(self):
+    def delete_old_xml_files(self) -> None:
         for f in self.path.iterdir():
             if f.stem == self.uplink_filename:
                 f.unlink()
 
 
-class Atis(object):
+class Atis:
 
-    def __init__(self, icao: str) -> None:
+    def __init__(self, icao: str, section: str) -> None:
         self.icao = icao
+        self.section = section
         self.error = None
         self.atis_info = None
         self.result = False
 
     @property
     def url(self) -> str:
-        return f"https://atis.rudicloud.com/a/{self.icao}"
+        """ return the url for the selected DATIS service """
+        match DATIS:
+            case 'atis.guru':
+                return f"https://atis.guru/atis/{self.icao}"
+            case 'atis.rudicloud.com':
+                return f"https://atis.rudicloud.com/a/{self.icao}"
+            case 'atis.report':
+                return f"https://atis.report/a/{self.icao}"
 
     @staticmethod
-    def run(icao: str) -> dict:
+    def run(payload: tuple[str, str]) -> dict:
         """
         return
         {'error', 'request_id', 'coroute_filename', 'message', 'fp_info'}
         """
 
-        a = Atis(icao)
+        a = Atis(*payload)
         response = a.query()
         if response and not a.error:
             a.process(response)
@@ -380,12 +395,25 @@ class Atis(object):
 
     def process(self, data: str) -> None:
 
-        if '<div class="atis-text">' not in data:
-            # DATIS not available
-            self.atis_info = f"D-ATIS not available for {self.icao}"
-            return
-        atis = data.split('<div class="atis-text">')[1].split('</div>')[0]\
-            .replace('\n\t', ' ').replace('\r\n', ' ').strip()
+        atis = None
+        if DATIS in ('atis.report', 'atis.rudicloud.com'):
+            if '<div class="atis-text">' not in data:
+                # DATIS not available
+                self.atis_info = f"D-ATIS not available for {self.icao}"
+                return
+            atis = data.split('<div class="atis-text">')[1].split('</div>')[0]\
+                .replace('\n\t', '\n').strip()
+        elif DATIS == 'atis.guru':
+            if '<div class="atis">' not in data:
+                # DATIS not available
+                self.atis_info = f"D-ATIS not available for {self.icao}"
+                return
+            parts = data.split('<div class="atis">')
+            arr_atis = parts[1].split('</div>')[0]
+            dep_atis = parts[2].split('</div>')[0]
+
+            atis = dep_atis if self.section == 'origin' else arr_atis
+            atis = atis.replace('&#xA;', '\n').replace('&#x9;', '').strip()
         self.atis_info = atis
 
 
@@ -570,7 +598,7 @@ class EasyCommand:
     Creates a command with an assigned callback with arguments
     """
 
-    def __init__(self, plugin, command, function, args=False, description=''):
+    def __init__(self, plugin, command, function, args=False, description='') -> None:
         command = f"{plugin_command_origin}/{command}"
         self.command = xp.createCommand(command, description)
         self.commandCH = self.commandCHandler
@@ -580,7 +608,7 @@ class EasyCommand:
         self.args = args
         self.plugin = plugin
 
-    def commandCHandler(self, inCommand, inPhase, inRefcon):
+    def commandCHandler(self, inCommand, inPhase, inRefcon) -> int:
         if inPhase == 0:
             if self.args:
                 if type(self.args).__name__ == 'tuple':
@@ -595,7 +623,7 @@ class EasyCommand:
         xp.unregisterCommandHandler(self.command, self.commandCH, 1, 0)
 
 
-class FloatingWidget(object):
+class FloatingWidget:
 
     LINE = FONT_HEIGHT + 4
     WIDTH = 240
@@ -663,13 +691,13 @@ class FloatingWidget(object):
     def create_window(cls, title: str, x: int, y: int, width: int = WIDTH, height: int = HEIGHT) -> FloatingWidget:
         return cls(title, x, y, width, height)
 
-    def get_height(self, lines: int | None = None) -> int:
+    def get_height(self, lines: Optional[int] = None) -> int:
         if not lines:
             return self.top - self.bottom
         else:
             return self.LINE*lines + 2*self.MARGIN
 
-    def get_subwindow_margins(self, lines: int | None = None) -> tuple[int, int, int, int]:
+    def get_subwindow_margins(self, lines: Optional[int] = None) -> tuple[int, int, int, int]:
         height = self.get_height(lines)
         return self.left + self.MARGIN, self.top - self.MARGIN, self.right - self.MARGIN, self.top - height + self.MARGIN
 
@@ -697,7 +725,7 @@ class FloatingWidget(object):
             0, text, 0, self.widget, xp.WidgetClass_Button
         )
 
-    def add_subwindow(self, lines: int | None = None):
+    def add_subwindow(self, lines: Optional[int] = None):
         height = self.get_height(lines)
         return xp.createWidget(
             self.left, self.top, self.right, self.top - height,
@@ -732,7 +760,7 @@ class FloatingWidget(object):
         )
         self.top = b - self.MARGIN*2
 
-    def add_content_widget(self, title: str = "", lines: int | None = None):
+    def add_content_widget(self, title: str = "", lines: Optional[int] = None) -> None:
         self.content_widget['subwindow'] = self.add_subwindow(lines=lines)
         l, t, r, b = self.get_subwindow_margins()
         if len(title):
@@ -750,7 +778,7 @@ class FloatingWidget(object):
             )
             t -= self.LINE
 
-    def show_content_widget(self):
+    def show_content_widget(self) -> None:
         if not xp.isWidgetVisible(self.content_widget['subwindow']):
             xp.showWidget(self.content_widget['subwindow'])
             if self.content_widget['title']:
@@ -758,7 +786,7 @@ class FloatingWidget(object):
             for el in self.content_widget['lines']:
                 xp.showWidget(el)
 
-    def hide_content_widget(self):
+    def hide_content_widget(self) -> None:
         if xp.isWidgetVisible(self.content_widget['subwindow']):
             xp.hideWidget(self.content_widget['subwindow'])
             if self.content_widget['title']:
@@ -766,7 +794,7 @@ class FloatingWidget(object):
             for el in self.content_widget['lines']:
                 xp.hideWidget(el)
 
-    def check_content_widget(self, lines: list[tuple[str, str] or str]):
+    def check_content_widget(self, lines: list[tuple[str, str] | str]) -> None:
         content = self.content_widget['lines']
         for i, el in enumerate(lines):
             if i < len(content):
@@ -774,18 +802,18 @@ class FloatingWidget(object):
                 if not text in xp.getWidgetDescriptor(content[i]):
                     xp.setWidgetDescriptor(content[i], text)
 
-    def populate_content_widget(self, lines: list[tuple[str, str] or str]):
+    def populate_content_widget(self, lines: list[tuple[str, str] | str]) -> None:
         content = self.content_widget['lines']
         for i, el in enumerate(lines):
             text = str(el) if not isinstance(el, tuple) else  f"{el[0].upper()}: {el[1]}"
             xp.setWidgetDescriptor(content[i], text)
 
-    def clear_content_widget(self):
+    def clear_content_widget(self) -> None:
         content = self.content_widget['lines']
         for el in content:
             xp.setWidgetDescriptor(el, "--")
 
-    def switch_window_position(self):
+    def switch_window_position(self) -> None:
         if xp.windowIsPoppedOut(self.window):
             xp.setWindowPositioningMode(self.window, xp.WindowPositionFree)
             xp.setWidgetProperty(self.popout_button, xp.Property_ButtonType, xp.LittleUpArrow)
@@ -806,7 +834,7 @@ class FloatingWidget(object):
         else:
             xp.setWindowIsVisible(self.window, 0)
 
-    def setup_widget(self, pilot_id: str | None = None):
+    def setup_widget(self, pilot_id: Optional[str] = None) -> None:
         if pilot_id:
             xp.hideWidget(self.pilot_id_input)
             xp.hideWidget(self.save_button)
@@ -822,10 +850,9 @@ class FloatingWidget(object):
 
     def destroy(self) -> None:
         xp.destroyWidget(self.widget)
-        # xp.destroyWindow(self.window)
 
 
-class PythonInterface(object):
+class PythonInterface:
 
     loop_schedule = DEFAULT_SCHEDULE
 
@@ -913,6 +940,10 @@ class PythonInterface(object):
     def at_gate(self) -> bool:
         return self.on_ground and not self.engines_started
 
+    @property
+    def datis_icao(self) -> str:
+        return '' if not self.datis_request else self.datis_request[0].upper()
+
     def check_aircraft(self) -> None:
         _, acf_path = xp.getNthAircraftModel(0)
         if acf_path != self.acf_path:
@@ -925,7 +956,7 @@ class PythonInterface(object):
             else:
                 self.aircraft = False
 
-    def check_datis_request(self):
+    def check_datis_request(self) -> None:
         if self.async_datis:
             # we already started a SimBrief async instance
             if not self.async_datis.pending():
@@ -948,7 +979,7 @@ class PythonInterface(object):
                             # no D-ATIS available for the station, no need to display D-ATIS panel
                             self.datis_message = result
                         else:
-                            self.datis_message = f"{datetime.utcnow().strftime('%H%M')}Z - {self.datis_request} D-ATIS:"
+                            self.datis_message = f"{datetime.utcnow().strftime('%H%M')}Z - {self.datis_icao} D-ATIS:"
                             self.datis_content = self.format_atis_info(result)
                 # reset download
                 self.async_datis = False
@@ -977,7 +1008,7 @@ class PythonInterface(object):
             xp.appendMenuItem(menu, 'D-ATIS', 2)
         return menu
 
-    def main_menu_callback(self, menuRef, menuItem):
+    def main_menu_callback(self, menuRef, menuItem) -> None:
         """Main menu Callback"""
         if menuItem == 1:
             if not self.details:
@@ -1038,7 +1069,7 @@ class PythonInterface(object):
         self.atisWidgetHandlerCB = self.datisWidgetHandler
         xp.addWidgetCallback(self.datis.widget, self.atisWidgetHandlerCB)
 
-    def detailsWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+    def detailsWidgetHandler(self, inMessage, inWidget, inParam1, inParam2) -> int:
         if not self.details:
             return 1
 
@@ -1077,7 +1108,7 @@ class PythonInterface(object):
                 return 1
         return 0
 
-    def datisWidgetHandler(self, inMessage, inWidget, inParam1, inParam2):
+    def datisWidgetHandler(self, inMessage, inWidget, inParam1, inParam2) -> int:
         if not self.datis:
             return 0
 
@@ -1111,26 +1142,27 @@ class PythonInterface(object):
             if inParam1 == self.datis.popout_button:
                 self.datis.switch_window_position()
             else:
-                icao = self.fp_info['origin' if inParam1 == self.datis.dep_button else 'destination']
-                xp.log(f"ATIS request: {icao}")
-                self.datis_request = icao
+                section = 'origin' if inParam1 == self.datis.dep_button else 'destination'
+                icao = self.fp_info[section]
+                xp.log(f"ATIS request: {icao}, {section}")
+                self.datis_request = (icao, section)
             return 1
 
         return 0
 
-    def detailsWindowToggle(self):
+    def detailsWindowToggle(self) -> None:
         if not self.details:
             self.create_details_window(100, 400)
         else:
             self.details.toggle_window()
 
-    def datisWindowToggle(self):
+    def datisWindowToggle(self) -> None:
         if not self.datis:
             self.create_datis_window(100, 800)
         else:
             self.datis.toggle_window()
 
-    def OFPReload(self):
+    def OFPReload(self) -> None:
         if self.aircraft_detected and self.fp_checked:
             self.details_message = 'OFP reload requested'
             self.fp_checked = False
@@ -1138,16 +1170,20 @@ class PythonInterface(object):
     def format_atis_info(self, string: str) -> list:
         # create lines from D-ATIS string
         width = self.datis.content_width
-        words = string.split(' ')
-        result = ['']
-        for word in words:
-            if xp.measureString(FONT, result[-1] + ' ' + word) < width:
-                result[-1] += word if not result[-1] else ' ' + word
-            else:
-                result.append(word)
+        # print(f"width: {width} | char: {FONT_WIDTH}")
+        lines = string.splitlines()
+        result = []
+        for line in lines:
+            result.append('')
+            words = line.split(' ')
+            for word in words:
+                if xp.measureString(FONT, result[-1] + ' ' + word) < width:
+                    result[-1] += word if not result[-1] else ' ' + word
+                else:
+                    result.append(word)
         return result
 
-    def loopCallback(self, lastCall, elapsedTime, counter, refCon):
+    def loopCallback(self, lastCall, elapsedTime, counter, refCon) -> int:
         """Loop Callback"""
         t = datetime.now().strftime('%H:%M:%S')
         start = perf_counter()
@@ -1244,10 +1280,10 @@ class PythonInterface(object):
             self.details_message = 'settings saved'
             self.details.setup_widget(self.pilot_id)
 
-    def XPluginStart(self):
+    def XPluginStart(self) -> tuple[str, str, str]:
         return self.plugin_name, self.plugin_sig, self.plugin_desc
 
-    def XPluginEnable(self):
+    def XPluginEnable(self) -> int:
         # enable features
         xp.enableFeature("XPLM_USE_NATIVE_WIDGET_WINDOWS", 1)
         # loopCallback
