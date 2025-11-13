@@ -24,7 +24,9 @@ from datetime import datetime, timedelta
 from time import perf_counter
 
 try:
-    from XPPython3 import xp
+    import xp
+    from XPPython3.utils.commands import create_command
+    from XPPython3.utils.datarefs import find_dataref
 except ImportError:
     print('xp module not found')
 
@@ -593,36 +595,6 @@ def weight_transform(weight: str, unit: str) -> str:
     return f"{round(str2int(weight) * m)} {t}"
 
 
-class EasyCommand:
-    """
-    Creates a command with an assigned callback with arguments
-    """
-
-    def __init__(self, plugin, command, function, args=False, description='') -> None:
-        command = f"{plugin_command_origin}/{command}"
-        self.command = xp.createCommand(command, description)
-        self.commandCH = self.commandCHandler
-        xp.registerCommandHandler(self.command, self.commandCH, 1, 0)
-
-        self.function = function
-        self.args = args
-        self.plugin = plugin
-
-    def commandCHandler(self, inCommand, inPhase, inRefcon) -> int:
-        if inPhase == 0:
-            if self.args:
-                if type(self.args).__name__ == 'tuple':
-                    self.function(*self.args)
-                else:
-                    self.function(self.args)
-            else:
-                self.function()
-        return 0
-
-    def destroy(self):
-        xp.unregisterCommandHandler(self.command, self.commandCH, 1, 0)
-
-
 class FloatingWidget:
 
     LINE = FONT_HEIGHT + 4
@@ -849,7 +821,7 @@ class FloatingWidget:
             xp.setKeyboardFocus(self.pilot_id_input)
 
     def destroy(self) -> None:
-        xp.destroyWidget(self.widget)
+        xp.destroyWidget(self.widget, 1)
 
 
 class PythonInterface:
@@ -867,8 +839,8 @@ class PythonInterface:
         self.plans = Path(self.prefs.parent, 'FMS plans')
 
         # Dref init
-        self.gears_on_ground = xp.findDataRef('sim/flightmodel2/gear/on_ground')
-        self.engines_burning_fuel = xp.findDataRef('sim/flightmodel2/engines/engine_is_burning_fuel')
+        self.wheels_on_ground = find_dataref('sim/flightmodel2/gear/on_ground')
+        self.engines_burning_fuel = find_dataref('sim/flightmodel2/engines/engine_is_burning_fuel')
 
         # app init
         self.config_file = Path(self.prefs, 'simbrief2zibo.prf')
@@ -901,21 +873,23 @@ class PythonInterface:
         self.main_menu = self.create_main_menu()
 
         # register commands
-        self.detailsWindowCMD = EasyCommand(
-            self, 'details_window_toggle', 
-            self.detailsWindowToggle,
-            description="Toggle SimBrief2Zibo OFP details window."
+        self.detailsWindowCMD = create_command(
+            name=f'{plugin_command_origin}/details_window_toggle',
+            description="Toggle SimBrief2Zibo OFP details window.",
+            callback=self.detailsWindowToggle,
         )
+
         if DATIS:
-            self.datisWindowCMD = EasyCommand(
-                self, 'datis_window_toggle', 
-                self.datisWindowToggle,
-                description="Toggle SimBrief2Zibo D-ATIS window."
+            self.datisWindowCMD = create_command(
+                name=f'{plugin_command_origin}/datis_window_toggle',
+                description="Toggle SimBrief2Zibo D-ATIS window.",
+                callback=self.datisWindowToggle,
             )
-        self.OFPReloadCMD = EasyCommand(
-            self, 'reload_simbrief_ofp', 
-            self.OFPReload,
-            description="Send a OFP request to SimBrief"
+
+        self.OFPReloadCMD = create_command(
+            name=f'{plugin_command_origin}/reload_simbrief_ofp',
+            description="Send a OFP request to SimBrief",
+            callback=self.OFPReload,
         )
 
     @property
@@ -925,16 +899,11 @@ class PythonInterface:
 
     @property
     def engines_started(self) -> bool:
-        values = []
-        xp.getDatavi(self.engines_burning_fuel, values, count=2)
-        return any(values)
+        return any(self.engines_burning_fuel.value)
 
     @property
     def on_ground(self) -> bool:
-        values = []
-        xp.getDatavi(self.gears_on_ground, values, count=3)
-        # should be all(values) but after Zibo loading front gear appears to be in the air
-        return any(values)
+        return any(self.wheels_on_ground.value)
 
     @property
     def at_gate(self) -> bool:
@@ -1150,19 +1119,25 @@ class PythonInterface:
 
         return 0
 
-    def detailsWindowToggle(self) -> None:
+    def detailsWindowToggle(self, phase: int, duration: float) -> None:
+        if phase > 0:
+            return
         if not self.details:
             self.create_details_window(100, 400)
         else:
             self.details.toggle_window()
 
-    def datisWindowToggle(self) -> None:
+    def datisWindowToggle(self, phase: int, duration: float) -> None:
+        if phase > 0:
+            return
         if not self.datis:
             self.create_datis_window(100, 800)
         else:
             self.datis.toggle_window()
 
-    def OFPReload(self) -> None:
+    def OFPReload(self, phase: int, duration: float) -> None:
+        if phase > 0:
+            return
         if self.aircraft_detected and self.fp_checked:
             self.details_message = 'OFP reload requested'
             self.fp_checked = False
@@ -1211,7 +1186,7 @@ class PythonInterface:
                                     self.request_id, self.fp_info = request_id, fp_info
                                     self.fp_checked = True
                                 elif self.fp_info:
-                                    # reload was requested, no no OFP found, we do not need to keep checking right now
+                                    # reload was requested, no OFP found, we do not need to keep checking right now
                                     self.fp_checked = True
                             # reset download
                             self.async_task = False
@@ -1292,10 +1267,10 @@ class PythonInterface:
         xp.scheduleFlightLoop(self.loop_id, interval=DEFAULT_SCHEDULE)
         return 1
 
-    def XPluginDisable(self):
+    def XPluginDisable(self) -> None:
         pass
 
-    def XPluginStop(self):
+    def XPluginStop(self) -> None:
         """Called once by X-Plane on quit (or when plugins are exiting as part of reload)"""
 
         # kill loop
@@ -1305,10 +1280,6 @@ class PythonInterface:
             self.details.destroy()
         if self.datis:
             self.datis.destroy()
-        # kill commands
-        self.OFPReloadCMD.destroy()
-        self.detailsWindowCMD.destroy()
-        self.datisWindowCMD.destroy()
         # destroy menu
         xp.destroyMenu(self.main_menu)
         xp.log("flightloop, widget, commands, menu destroyed, exiting ...")
