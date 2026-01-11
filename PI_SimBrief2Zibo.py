@@ -34,6 +34,16 @@ except ImportError:
 # Version
 __VERSION__ = 'v2.0'
 
+# debug 
+DEBUG = False
+
+def log(msg: str) -> None:
+    xp.log(msg)
+
+def debug(msg: str, tag: str = "DEBUG") -> None:
+    if DEBUG:
+        xp.log(f"[{tag}] {msg}")
+
 # Plugin parameters required from XPPython3
 plugin_name = 'SimBrief2Zibo'
 plugin_sig = 'xppython3.simbrief2zibo'
@@ -57,6 +67,7 @@ DATIS = 'atis.guru' # False to avoid displaying DATIS widget waiting for a new w
 try:
     FONT = xp.Font_Proportional
     FONT_WIDTH, FONT_HEIGHT, _ = xp.getFontDimensions(FONT)
+    debug(f"font width: {FONT_WIDTH} | height: {FONT_HEIGHT}", "FONT")
 except NameError:
     FONT_WIDTH, FONT_HEIGHT = 10, 10
 
@@ -429,7 +440,6 @@ def shrink_xml(data: ET.Element) -> ET.Element:
     for tag in tag_list:
         results = data.findall(tag)
         if results:
-            # print(f"found {tag}")
             for el in results:
                 data.remove(el)
     for tag in ('origin', 'destination', 'alternate'):
@@ -822,6 +832,7 @@ class FloatingWidget:
 
     def destroy(self) -> None:
         xp.destroyWidget(self.widget, 1)
+        # xp.destroyWindow(self.window)
 
 
 class PythonInterface:
@@ -916,14 +927,17 @@ class PythonInterface:
     def check_aircraft(self) -> None:
         _, acf_path = xp.getNthAircraftModel(0)
         if acf_path != self.acf_path:
+            debug(" * detection not needed", "ACFT")
             self.acf_path = acf_path
             acf = next((p[0] for p in AIRCRAFTS if p[1] in self.acf_path), None)
             if acf:
                 self.aircraft = acf
+                debug(f" *** aircraft detected: {acf}", "ACFT")
                 if 'not detected' in self.details_message:
                     self.details_message = f"{acf} detected"
             else:
                 self.aircraft = False
+                debug(" *** no useful aircraft detected", "ACFT")
 
     def check_datis_request(self) -> None:
         if self.async_datis:
@@ -934,14 +948,14 @@ class PythonInterface:
                 if isinstance(self.async_datis.result, Exception):
                     # a non managed error occurred
                     self.datis_message = "An unknown error occurred"
-                    xp.log(f" *** Unmanaged error in async task {self.async_datis.pid}: {self.async_datis.result}")
+                    log(f" *** Unmanaged error in async task {self.async_datis.pid}: {self.async_datis.result}")
                 else:
                     # result: {error, atis_info}
                     error, result = self.async_datis.result.values()
                     if error:
                         # a managed error occurred
                         self.datis_message = "Error retrieving D-ATIS"
-                        xp.log(f" *** D-ATIS error in async task {self.async_datis.pid}: {error}")
+                        log(f" *** D-ATIS error in async task {self.async_datis.pid}: {error}")
                     elif result:
                         # we have a valid response
                         if "D-ATIS not available" in result:
@@ -950,6 +964,7 @@ class PythonInterface:
                         else:
                             self.datis_message = f"{datetime.utcnow().strftime('%H%M')}Z - {self.datis_icao} D-ATIS:"
                             self.datis_content = self.format_atis_info(result)
+
                 # reset download
                 self.async_datis = False
                 self.datis_request = False
@@ -966,6 +981,7 @@ class PythonInterface:
                 self.datis_request,
             )
             self.async_datis.start()
+            debug(f" ** {datetime.now().strftime('%H:%M:%S')} loop - starting new D-ATIS async ...", "DATIS")
 
     def create_main_menu(self):
         # create Menu
@@ -1033,6 +1049,7 @@ class PythonInterface:
 
         # add content widget
         self.datis.add_content_widget()
+        debug(f"ATIS: added {len(self.datis.content_widget['lines'])} info lines", "DATIS")
 
         # Register our widget handler
         self.atisWidgetHandlerCB = self.datisWidgetHandler
@@ -1113,7 +1130,7 @@ class PythonInterface:
             else:
                 section = 'origin' if inParam1 == self.datis.dep_button else 'destination'
                 icao = self.fp_info[section]
-                xp.log(f"ATIS request: {icao}, {section}")
+                debug(f"ATIS request: {icao}, {section}", "DATIS")
                 self.datis_request = (icao, section)
             return 1
 
@@ -1145,7 +1162,6 @@ class PythonInterface:
     def format_atis_info(self, string: str) -> list:
         # create lines from D-ATIS string
         width = self.datis.content_width
-        # print(f"width: {width} | char: {FONT_WIDTH}")
         lines = string.splitlines()
         result = []
         for line in lines:
@@ -1162,40 +1178,55 @@ class PythonInterface:
         """Loop Callback"""
         t = datetime.now().strftime('%H:%M:%S')
         start = perf_counter()
+        debug(' --------------------- ', "LOOP")
+        debug(f" --- {t} Loop started...", "LOOP")
+        debug(f" --- async started: {bool(self.async_task)}", "LOOP")
+        debug(f" --- message: {self.details_message} | ", "LOOP")
+        debug(f"Aircraft Detected: {self.aircraft_detected} | in flight: {self.flight_started} | pilot ID: {self.pilot_id}", "LOOP")
         if self.aircraft_detected and self.pilot_id:
+            debug(f'we are in...', "LOOP")
+            debug(f"FP checked: {self.fp_checked} | At gate: {self.at_gate} | Flight started: {self.flight_started}", "LOOP")
             if not self.flight_started:
                 if not self.fp_checked and self.at_gate:
                     # check fp
+                    debug(f"checking status ...", "LOOP")
                     if self.async_task:
                         # we already started a SimBrief async instance
                         if not self.async_task.pending():
                             # job ended
                             self.async_task.join()
+                            debug(f" --- {t} async task {self.async_task.pid} ended after {round(self.async_task.elapsed, 3)} sec", "LOOP")
                             if isinstance(self.async_task.result, Exception):
                                 # a non managed error occurred
                                 self.details_message = "An unknown error occurred"
-                                xp.log(f" *** Unmanaged error in async task {self.async_task.pid}: {self.async_task.result}")
+                                log(f" *** Unmanaged error in async task {self.async_task.pid}: {self.async_task.result}")
                             else:
                                 # result: {error, request_id, message, fp_info}
                                 error, request_id, self.details_message, fp_info = self.async_task.result.values()
+                                debug(f" --- message: {self.details_message}", "LOOP")
                                 if error:
                                     # a managed error occurred
-                                    xp.log(f" *** SimBrief error in async task {self.async_task.pid}: {error}")
+                                    log(f" *** SimBrief error in async task {self.async_task.pid}: {error}")
                                 elif fp_info:
                                     # we have a valid response
                                     self.request_id, self.fp_info = request_id, fp_info
+                                    debug(f" --- Valid response: {self.request_id}", "LOOP")
+                                    debug(f" --- fp_info: {self.fp_info}", "LOOP")
                                     self.fp_checked = True
                                 elif self.fp_info:
                                     # reload was requested, no OFP found, we do not need to keep checking right now
+                                    debug(f" --- message: {self.details_message}", "LOOP")
                                     self.fp_checked = True
                             # reset download
                             self.async_task = False
                             self.loop_schedule = DEFAULT_SCHEDULE
                         else:
                             # no answer yet, waiting ...
+                            debug(f" --- {t} loop - no answer yet, waiting ...", "LOOP")
                             pass
                     else:
                         # we need to start an async task
+                        debug(f" ** {datetime.now().strftime('%H:%M:%S')} loop - starting new async ...", "LOOP")
                         self.details_message = "starting SimBrief query ..."
                         self.async_task = Async(
                             SimBrief.run,
@@ -1207,11 +1238,13 @@ class PythonInterface:
                         self.loop_schedule = 3
                 elif not self.flight_started and not self.at_gate:
                     # flight mode, do nothing
+                    debug(f'--- set flight started...', "LOOP")
                     self.flight_started = True
                     self.details_message = "Have a nice flight!"
                     self.loop_schedule = DEFAULT_SCHEDULE * 10
             elif self.at_gate:
                 # look for a new OFP for a turnaround flight
+                debug(f' *** Flight end detected', "LOOP")
                 self.flight_started = False
                 self.fp_checked = False
                 self.fp_info = {}
@@ -1223,8 +1256,10 @@ class PythonInterface:
                 self.details_message = "Aircraft not detected"
             elif not self.pilot_id:
                 self.details_message = "SimBrief PilotID required"
+            debug(f" --- {self.details_message}: nothing to do, exiting ...", "LOOP")
             self.loop_schedule = DEFAULT_SCHEDULE * 5
 
+        debug(f" --- loopCallback() ended after {round(perf_counter() - start, 3)} sec | schedule = {self.loop_schedule} sec", "LOOP")
         return self.loop_schedule
 
     def load_settings(self) -> bool:
@@ -1242,6 +1277,7 @@ class PythonInterface:
 
     def save_settings(self) -> None:
         user_id = xp.getWidgetDescriptor(self.details.pilot_id_input).strip()
+        debug(f"user_id_input: {user_id}", "SETTINGS")
         if not user_id.isdigit():
             # user gave something else in input
             self.details_message = "pilotID has to be a number"
@@ -1264,6 +1300,7 @@ class PythonInterface:
         # loopCallback
         self.loop = self.loopCallback
         self.loop_id = xp.createFlightLoop(self.loop, phase=1)
+        log(f" - {datetime.now().strftime('%H:%M:%S')} Flightloop created, ID {self.loop_id}")
         xp.scheduleFlightLoop(self.loop_id, interval=DEFAULT_SCHEDULE)
         return 1
 
@@ -1282,4 +1319,4 @@ class PythonInterface:
             self.datis.destroy()
         # destroy menu
         xp.destroyMenu(self.main_menu)
-        xp.log("flightloop, widget, commands, menu destroyed, exiting ...")
+        log("flightloop, widget, commands, menu destroyed, exiting ...")
