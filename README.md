@@ -8,7 +8,17 @@ Fetch latest user OFP Data from SimBrief and creates the file ZIBO B737-800 modi
 - **NEW** added support for LevelUp B737NG series
 
 ## How to use
-It works only with **Zibo B737-800 modified** and **LevelUp B737NG series**. It requires user SimBrief Pilot ID to work. Just save it in the plugin settings.
+It works only with **Zibo B737-800 modified** and **LevelUp B737NG series**.\
+The plugin uses the aircraft path to recognize the aircraft, so _B737-800X_ or _LevelUp_ need to be present in the path.For example:
+```
+- x-plane 12
+    - Aircraft
+        - Zibo
+            - B737-800X
+        - LevelUp
+            - 737NG Series V2
+```
+It requires user SimBrief Pilot ID to work. Just save it in the plugin settings.
 > [!NOTE]
 > Pilot ID is a number, you can find it in your SimBrief Account Settings.
 > Not your username, nor your password
