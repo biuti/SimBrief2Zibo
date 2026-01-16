@@ -605,6 +605,35 @@ def weight_transform(weight: str, unit: str) -> str:
     return f"{round(str2int(weight) * m)} {t}"
 
 
+class Dref:
+
+    def __init__(self) -> None:
+        self._on_ground = find_dataref('sim/flightmodel2/gear/on_ground')  # array(16): 0 in air, 1 on ground
+        self._burning_fuel = find_dataref('sim/flightmodel2/engines/engine_is_burning_fuel')  # array(16): 0 off, 1 burning fuel
+        self._avitab_installed = find_dataref('laminar/B738/avitab_installed')  # int: 0 False, 1 True
+
+    @property
+    def wheels_on_ground(self) -> list[int]:
+        try:
+            return self._on_ground.value
+        except SystemError:
+            return []
+
+    @property
+    def burning_fuel(self) -> list[int]:
+        try:
+            return self._burning_fuel.value
+        except SystemError:
+            return []
+
+    @property
+    def avitab_installed(self) -> bool:
+        try:
+            return bool(self._avitab_installed.value)
+        except SystemError:
+            return False
+
+
 class FloatingWidget:
 
     LINE = FONT_HEIGHT + 4
@@ -850,8 +879,7 @@ class PythonInterface:
         self.plans = Path(self.prefs.parent, 'FMS plans')
 
         # Dref init
-        self.wheels_on_ground = find_dataref('sim/flightmodel2/gear/on_ground')
-        self.engines_burning_fuel = find_dataref('sim/flightmodel2/engines/engine_is_burning_fuel')
+        self.dref = False
 
         # app init
         self.config_file = Path(self.prefs, 'simbrief2zibo.prf')
@@ -910,11 +938,19 @@ class PythonInterface:
 
     @property
     def engines_started(self) -> bool:
-        return any(self.engines_burning_fuel.value)
+        if self.dref:
+            return any(self.dref.burning_fuel)
+        return False
 
     @property
     def on_ground(self) -> bool:
-        return any(self.wheels_on_ground.value)
+        if self.dref:
+            return any(self.dref.wheels_on_ground)
+        return False
+
+    @property
+    def avitab_installed(self) -> bool:
+        return AVITAB_FOLDER.is_dir()
 
     @property
     def at_gate(self) -> bool:
@@ -927,7 +963,6 @@ class PythonInterface:
     def check_aircraft(self) -> None:
         _, acf_path = xp.getNthAircraftModel(0)
         if acf_path != self.acf_path:
-            debug(" * detection not needed", "ACFT")
             self.acf_path = acf_path
             acf = next((p[0] for p in AIRCRAFTS if p[1] in self.acf_path), None)
             if acf:
@@ -935,9 +970,13 @@ class PythonInterface:
                 debug(f" *** aircraft detected: {acf}", "ACFT")
                 if 'not detected' in self.details_message:
                     self.details_message = f"{acf} detected"
+                if not self.dref:
+                    self.dref = Dref()
             else:
                 self.aircraft = False
                 debug(" *** no useful aircraft detected", "ACFT")
+                if self.dref:
+                    self.dref = False
 
     def check_datis_request(self) -> None:
         if self.async_datis:
