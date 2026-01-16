@@ -28,7 +28,7 @@ try:
     from XPPython3.utils.commands import create_command
     from XPPython3.utils.datarefs import find_dataref
 except ImportError:
-    print('xp module not found')
+    print('[Simbrief2Zibo] xp module not found')
 
 
 # Version
@@ -74,6 +74,11 @@ except NameError:
 DETAILS_WIDTH = 240
 ATIS_WIDTH = DETAILS_WIDTH * 2
 
+# AviTab folder
+AVITAB_FOLDER = Path(xp.getSystemPath(), 'Resources', 'plugins', 'AviTab')
+PDF_FOLDER = Path(AVITAB_FOLDER, 'OFP')
+PDF_FILENAME = 'ofp.pdf'
+
 
 def get_unsecure_url(url: str) -> str:
     parsed = parse.urlparse(url)
@@ -88,20 +93,20 @@ def get_from_url(url: str) -> tuple[bool | requests.Response, str | int | None]:
         response = requests.get(url, verify=True)
     except requests.exceptions.SSLError as e:
         # change link to unsecure protocol to avoid SSL error in some weird systems
-        print(f" *** connection to {url} had to run in unsecure mode: {e.args[0]}")
+        log(f" *** [Simbrief2Zibo] connection to {url} had to run in unsecure mode: {e.args[0]}")
         try:
             link = get_unsecure_url(url)
             response = requests.get(link, verify=False, timeout=5)
         except Exception as e:
-            print(f"*** SimBrief generic error: {e.args[0]}")
+            log(f"*** [Simbrief2Zibo] SimBrief generic error: {e.args[0]}")
             error = e.args[0]
     except requests.exceptions.ConnectionError as e:
-        print(f"*** SimBrief connection error: {e.args[0]}")
+        log(f"*** [Simbrief2Zibo] SimBrief connection error: {e.args[0]}")
         error = e.args[0]
     finally:
         if isinstance(response, requests.Response) and response.status_code != 200:
             error = response.status_code
-            print(f"*** SimBrief connection refused: {response.status_code} - {response.reason}")
+            log(f"*** [Simbrief2Zibo] SimBrief connection refused: {response.status_code} - {response.reason}")
     return response, error
 
 
@@ -147,10 +152,11 @@ class SimBrief:
     source = 'xml'
     uplink_filename = 'b738x'
 
-    def __init__(self, pilot_id: str, path: Path, request_id: Optional[str] = None) -> None:
+    def __init__(self, pilot_id: str, path: Path, avitab: bool = False, request_id: Optional[str] = None) -> None:
         self.pilot_id = pilot_id
         self.path = path
         self.request_id = request_id
+        self.avitab = avitab
         self.ofp = None
         self.origin = None  # Departure ICAO
         self.destination = None  # Destination ICAO
@@ -170,13 +176,13 @@ class SimBrief:
         return f"https://www.simbrief.com/api/xml.fetcher.php?userid={self.pilot_id}&json=1"
 
     @staticmethod
-    def run(pilot_id: str, path: Path, request_id=None) -> dict:
+    def run(pilot_id: str, path: Path, avitab: bool = False, request_id = None) -> dict:
         """
         return
         {'error', 'request_id', 'coroute_filename', 'message', 'fp_info'}
         """
 
-        s = SimBrief(pilot_id, path, request_id)
+        s = SimBrief(pilot_id, path, avitab, request_id)
         url = s.xml_url if s.source == 'xml' else s.json_url
         response = s.query(url)
         if response and not s.error:
@@ -212,7 +218,7 @@ class SimBrief:
                 with open(destination, 'wb') as f:
                     f.write(response.content)
             except (FileNotFoundError, PermissionError, OSError) as e:
-                print(f"*** simbrief2zibo error saving FP file: {e.args[0]}")
+                log(f"[Simbrief2Zibo] *** error saving FP file: {e.args[0]}")
                 self.message = "Error writing FP file"
                 self.error = e.args[0]
                 return False
@@ -235,10 +241,12 @@ class SimBrief:
         ofp = shrink_xml(data)
         fp_filename = self.find_or_retrieve_fp(ofp)
         if fp_filename:
+            debug("we have a fp filename", 'Simbrief')
             self.request_id = request_id
             self.coroute_filename = fp_filename
             parsed = self.parse_ofp(ofp)
             if self.create_xml_file(ofp, parsed):
+                debug("created xml file", 'Simbrief')
                 self.message = "All set!"
                 # get more info
                 callsign = ofp.find('atc').find('callsign').text
@@ -263,6 +271,29 @@ class SimBrief:
                     'tow': f"{tow} {u} ({weight_transform(tow, u)})",
                     'ldw': f"{ldw} {u} ({weight_transform(ldw, u)})"
                 }
+                # download PDF file if AviTab is installed
+                debug(f"Avitab installed: {self.avitab}", 'AviTab')
+                if self.avitab:
+                    debug("retrieving PDF file ...", 'AviTab')
+                    self.retrieve_pdf_file(ofp)
+
+    def retrieve_pdf_file(self, data: ET.Element) -> None:
+        if not AVITAB_FOLDER.is_dir():
+            return
+        try:
+            files = data.find('fms_downloads')
+            simbrief_directory = files.find('directory').text
+            filename = files.find('pdf').find('link').text
+        except AttributeError as e:
+            log(f'Error retrieving simbrief directory: {e}')
+            return
+        if not (simbrief_directory and filename):
+            return
+        source_url = parse.urljoin(simbrief_directory, filename)
+        PDF_FOLDER.mkdir(exist_ok=True)
+        destination = Path(PDF_FOLDER, PDF_FILENAME)
+        debug(f'downloading Simbrief PDF file fom {source_url} to {destination}', 'AviTab')
+        self.download(source_url, destination)
 
     def parse_ofp(self, ofp: ET.Element) -> dict:
         """
@@ -468,12 +499,15 @@ def extract_dep_arr(ofp: ET.Element) -> tuple[list, list]:
     arr = []
 
     if rte:
+        debug(f"rte: {rte}", "Simbrief2Zibo")
         # Departure
         dep_rwy = orig.find('plan_rwy').text
+        debug(f"dep RWY: {dep_rwy}", "Simbrief2Zibo")
         if dep_rwy:
             # we have a dep. rwy
             dep.append(f"DEPRWY RW{dep_rwy}")
         if rte[0].startswith(dep_icao):
+            debug(f"dep icao: {dep_icao} | rte[0]]: {rte[0]}", "Simbrief2Zibo")
             rte.pop(0)
         if len(rte) > 1:
             if '.' in rte[0]:
@@ -492,8 +526,10 @@ def extract_dep_arr(ofp: ET.Element) -> tuple[list, list]:
         arr_rwy = dest.find('plan_rwy').text
         if arr_rwy:
             arr.append(f"DESRWY RW{arr_rwy}")
+        debug(f"arr RWY: {arr_rwy}", "Simbrief2Zibo")
         des = None
         if rte[-1].startswith(arr_icao):
+            debug(f"arr icao: {arr_icao} | rte[-1]: {rte[-1]}", "Simbrief2Zibo")
             des = rte.pop(-1)
         if len(rte) > 3 and rte[0] != rte[-1]:
             if '.' in rte[-1]:
@@ -511,6 +547,7 @@ def extract_dep_arr(ofp: ET.Element) -> tuple[list, list]:
         if des and '/' in des:
             _, app = des.split('/')
             arr.append(f"APP {app}")
+    debug(f"dep: {dep} | arr: {arr}", "Simbrief2Zibo")
     return dep, arr
 
 
@@ -1267,10 +1304,12 @@ class PythonInterface:
                         # we need to start an async task
                         debug(f" ** {datetime.now().strftime('%H:%M:%S')} loop - starting new async ...", "LOOP")
                         self.details_message = "starting SimBrief query ..."
+                        debug(f" ** AviTab Installed: {self.avitab_installed} | dref: {self.dref._avitab_installed.value} ({self.dref.avitab_installed})")
                         self.async_task = Async(
                             SimBrief.run,
                             self.pilot_id,
                             self.plans,
+                            self.avitab_installed,
                             self.request_id
                         )
                         self.async_task.start()
