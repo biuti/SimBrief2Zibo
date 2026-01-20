@@ -4,8 +4,9 @@ Fetch latest user OFP Data from SimBrief and creates the file ZIBO B737-800 modi
 ## Features
 - Creates the _b738x.xml_ file needed for Zibo ver.5.6+ UPLINK feature from latest SimBrief OFP
 - To use standard CO ROUTE option, if a recent flightplan file for the flight is not available, it downloads the fms file with the name reported in plugin widget, **adding DEP and ARR procedures if available in XML file**
-- **NEW** added a new working web url for **D-ATIS** widget
-- **NEW** added support for LevelUp B737NG series
+- working web url for **D-ATIS** widget
+- added support for LevelUp B737NG series (U1 and U2)
+- **NEW** creates a PDF version of the OFP in OFP folder in _AviTab_ (if AViTab is detected)
 
 ## How to use
 It works only with **Zibo B737-800 modified** and **LevelUp B737NG series**.\

@@ -152,11 +152,11 @@ class SimBrief:
     source = 'xml'
     uplink_filename = 'b738x'
 
-    def __init__(self, pilot_id: str, path: Path, avitab: bool = False, request_id: Optional[str] = None) -> None:
+    def __init__(self, pilot_id: str, path: Path, request_id: Optional[str] = None) -> None:
         self.pilot_id = pilot_id
         self.path = path
         self.request_id = request_id
-        self.avitab = avitab
+        self.avitab = AVITAB_FOLDER.is_dir()
         self.ofp = None
         self.origin = None  # Departure ICAO
         self.destination = None  # Destination ICAO
@@ -176,13 +176,17 @@ class SimBrief:
         return f"https://www.simbrief.com/api/xml.fetcher.php?userid={self.pilot_id}&json=1"
 
     @staticmethod
-    def run(pilot_id: str, path: Path, avitab: bool = False, request_id = None) -> dict:
+    def run(pilot_id: str, path: Path, request_id = None) -> dict:
         """
         return
         {'error', 'request_id', 'coroute_filename', 'message', 'fp_info'}
         """
 
-        s = SimBrief(pilot_id, path, avitab, request_id)
+        s = SimBrief(
+            pilot_id, 
+            path,  
+            request_id
+        )
         url = s.xml_url if s.source == 'xml' else s.json_url
         response = s.query(url)
         if response and not s.error:
@@ -272,13 +276,14 @@ class SimBrief:
                     'ldw': f"{ldw} {u} ({weight_transform(ldw, u)})"
                 }
                 # download PDF file if AviTab is installed
-                debug(f"Avitab installed: {self.avitab}", 'AviTab')
+                debug(f"Avitab installed: {self.avitab}", 'SimBrief2Zibo AviTab')
                 if self.avitab:
-                    debug("retrieving PDF file ...", 'AviTab')
+                    debug("retrieving PDF file ...", 'SimBrief2Zibo AviTab')
                     self.retrieve_pdf_file(ofp)
 
     def retrieve_pdf_file(self, data: ET.Element) -> None:
-        if not AVITAB_FOLDER.is_dir():
+        if not self.avitab:
+            # extreme sanity, should never ever happen
             return
         try:
             files = data.find('fms_downloads')
@@ -292,7 +297,7 @@ class SimBrief:
         source_url = parse.urljoin(simbrief_directory, filename)
         PDF_FOLDER.mkdir(exist_ok=True)
         destination = Path(PDF_FOLDER, PDF_FILENAME)
-        debug(f'downloading Simbrief PDF file fom {source_url} to {destination}', 'AviTab')
+        debug(f'downloading Simbrief PDF file fom {source_url} to {destination}', 'SimBrief2Zibo AviTab')
         self.download(source_url, destination)
 
     def parse_ofp(self, ofp: ET.Element) -> dict:
@@ -647,7 +652,6 @@ class Dref:
     def __init__(self) -> None:
         self._on_ground = find_dataref('sim/flightmodel2/gear/on_ground')  # array(16): 0 in air, 1 on ground
         self._burning_fuel = find_dataref('sim/flightmodel2/engines/engine_is_burning_fuel')  # array(16): 0 off, 1 burning fuel
-        self._avitab_installed = find_dataref('laminar/B738/avitab_installed')  # int: 0 False, 1 True
 
     @property
     def wheels_on_ground(self) -> list[int]:
@@ -662,13 +666,6 @@ class Dref:
             return self._burning_fuel.value
         except SystemError:
             return []
-
-    @property
-    def avitab_installed(self) -> bool:
-        try:
-            return bool(self._avitab_installed.value)
-        except SystemError:
-            return False
 
 
 class FloatingWidget:
@@ -986,10 +983,6 @@ class PythonInterface:
         return False
 
     @property
-    def avitab_installed(self) -> bool:
-        return AVITAB_FOLDER.is_dir()
-
-    @property
     def at_gate(self) -> bool:
         return self.on_ground and not self.engines_started
 
@@ -1304,12 +1297,10 @@ class PythonInterface:
                         # we need to start an async task
                         debug(f" ** {datetime.now().strftime('%H:%M:%S')} loop - starting new async ...", "LOOP")
                         self.details_message = "starting SimBrief query ..."
-                        debug(f" ** AviTab Installed: {self.avitab_installed} | dref: {self.dref._avitab_installed.value} ({self.dref.avitab_installed})")
                         self.async_task = Async(
                             SimBrief.run,
                             self.pilot_id,
                             self.plans,
-                            self.avitab_installed,
                             self.request_id
                         )
                         self.async_task.start()
