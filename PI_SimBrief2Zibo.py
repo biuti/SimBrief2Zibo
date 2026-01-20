@@ -32,7 +32,7 @@ except ImportError:
 
 
 # Version
-__VERSION__ = 'v2.2-beta.1'
+__VERSION__ = 'v2.2'
 
 # debug 
 DEBUG = False
