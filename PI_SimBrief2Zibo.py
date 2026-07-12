@@ -462,7 +462,7 @@ class Atis:
             dep_atis = parts[2].split('</div>')[0]
 
             atis = dep_atis if self.section == 'origin' else arr_atis
-            atis = atis.replace('&#xA;', '\n').replace('&#x9;', '').strip()
+            atis = atis.replace('&#xA;', '\n').replace("&#xD;", "").replace('&#x9;', '').strip()
         self.atis_info = atis
 
 
